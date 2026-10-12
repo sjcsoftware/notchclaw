@@ -30,6 +30,7 @@ final class AppModel {
         session.isUserLooking = { [weak self] in self?.notch.isExpanded ?? false }
         session.onAssistantOutput = { [weak self] in self?.assistantProduced() }
         voice.onFinished = { [weak self] text in self?.handleTranscript(text) }
+        voice.onFailed = { [weak self] in self?.voiceFailed() }
         hotKey.onPress = { [weak self] in self?.pushToTalkPressed() }
         hotKey.onRelease = { [weak self] in self?.pushToTalkReleased() }
     }
@@ -43,8 +44,17 @@ final class AppModel {
         gateway.configure(urlString: settings.gatewayURL, token: settings.gatewayToken)
     }
 
+    /// Set when the shortcut couldn't be registered (usually another app owns it).
+    private(set) var hotKeyError: String?
+
     func applyHotKey() {
-        hotKey.register(settings.pushToTalkEnabled && !isRecordingShortcut ? settings.pushToTalk : nil)
+        let combo = settings.pushToTalkEnabled && !isRecordingShortcut ? settings.pushToTalk : nil
+        let ok = hotKey.register(combo)
+        if let combo, !ok {
+            hotKeyError = "\(combo.display) is already used by another app. Pick a different shortcut."
+        } else if !isRecordingShortcut {
+            hotKeyError = nil
+        }
     }
 
     // MARK: Push-to-talk
@@ -59,8 +69,10 @@ final class AppModel {
     }
 
     private func pushToTalkPressed() {
+        Log.info("Push-to-talk pressed (expanded=\(notch.isExpanded))")
         expandedForVoice = !notch.isExpanded
-        notch.expand()
+        // Talking always happens on the default screen, with the agent front and center.
+        notch.expand(page: .home)
         session.clearAttention()
         bubbleTask?.cancel()
         spokenText = nil
@@ -68,14 +80,22 @@ final class AppModel {
     }
 
     private func pushToTalkReleased() {
+        Log.info("Push-to-talk released (phase=\(voice.phase), page=\(notch.page), expanded=\(notch.isExpanded))")
         voice.end()
     }
 
-    private func handleTranscript(_ text: String) {
-        guard !text.isEmpty else {
-            if expandedForVoice, !notch.isHovering { notch.collapse() }
-            return
+    /// Leave the error in the bubble long enough to read, then tidy up if we opened for voice.
+    private func voiceFailed() {
+        guard expandedForVoice else { return }
+        bubbleTask?.cancel()
+        bubbleTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, !notch.isHovering, notch.page == .home, !voice.isActive else { return }
+            notch.collapse()
         }
+    }
+
+    private func handleTranscript(_ text: String) {
         spokenText = text
         if let command = VoiceCommand.parse(text) {
             perform(command)

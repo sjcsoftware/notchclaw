@@ -18,13 +18,19 @@ final class VoiceController {
     internal(set) var transcript = ""
     internal(set) var level: Float = 0
 
-    /// Delivers the final transcript after release (empty if nothing was heard).
+    /// Delivers the final transcript after release.
     @ObservationIgnored var onFinished: ((String) -> Void)?
+    /// Called when a listening attempt ends in an error shown to the user.
+    @ObservationIgnored var onFailed: (() -> Void)?
 
     @ObservationIgnored private let engine = AVAudioEngine()
+    @ObservationIgnored private let requestBox = RequestBox()
     @ObservationIgnored private var recognizer: SFSpeechRecognizer?
-    @ObservationIgnored private var request: SFSpeechAudioBufferRecognitionRequest?
     @ObservationIgnored private var task: SFSpeechRecognitionTask?
+    @ObservationIgnored private var taskGeneration = 0
+    @ObservationIgnored private var usingOnDevice = false
+    @ObservationIgnored private var retriedOnServer = false
+    @ObservationIgnored private var lastError: Error?
     @ObservationIgnored private var releasedEarly = false
     @ObservationIgnored private var finishTimeout: Task<Void, Never>?
     @ObservationIgnored private var failureReset: Task<Void, Never>?
@@ -33,7 +39,10 @@ final class VoiceController {
 
     func begin(localeIdentifier: String) {
         guard !isActive else { return }
+        failureReset?.cancel()
         releasedEarly = false
+        retriedOnServer = false
+        lastError = nil
         transcript = ""
         level = 0
         phase = .listening
@@ -44,7 +53,7 @@ final class VoiceController {
             }
             guard phase == .listening else { return }
             if releasedEarly {
-                // Released before permissions resolved; nothing was recorded.
+                // Released before the permission prompt resolved; nothing was recorded.
                 phase = .idle
                 return
             }
@@ -53,26 +62,23 @@ final class VoiceController {
     }
 
     func end() {
-        switch phase {
-        case .listening:
-            guard request != nil else {
-                releasedEarly = true
-                return
-            }
-            phase = .finishing
-            stopAudio()
-            request?.endAudio()
-            finishTimeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(1.6))
-                guard !Task.isCancelled else { return }
-                self?.deliver()
-            }
-        default:
-            break
+        guard phase == .listening else { return }
+        guard requestBox.request != nil else {
+            releasedEarly = true
+            return
+        }
+        phase = .finishing
+        stopAudio()
+        requestBox.request?.endAudio()
+        finishTimeout = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(1.6))
+            guard !Task.isCancelled else { return }
+            self?.deliver()
         }
     }
 
     func cancel() {
+        taskGeneration += 1
         task?.cancel()
         stopAudio()
         cleanup()
@@ -82,15 +88,10 @@ final class VoiceController {
     private func startRecognition(localeIdentifier: String) {
         let locale = localeIdentifier.isEmpty ? Locale.current : Locale(identifier: localeIdentifier)
         guard let recognizer = SFSpeechRecognizer(locale: locale) ?? SFSpeechRecognizer(), recognizer.isAvailable else {
-            fail("Speech recognition isn't available for this language.")
+            fail("Speech recognition isn't available for this language right now.")
             return
         }
         self.recognizer = recognizer
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        request.addsPunctuation = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-        self.request = request
 
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
@@ -98,33 +99,58 @@ final class VoiceController {
             fail("No microphone input available.")
             return
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            request.append(buffer)
-            let level = Self.rms(buffer)
-            Task { @MainActor in self?.level = level }
-        }
+        startTask(onDevice: recognizer.supportsOnDeviceRecognition)
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format,
+                         block: Self.makeTap(box: requestBox) { [weak self] level in self?.level = level })
         engine.prepare()
         do {
             try engine.start()
         } catch {
             input.removeTap(onBus: 0)
             fail("Couldn't start the microphone: \(error.localizedDescription)")
+        }
+    }
+
+    private func startTask(onDevice: Bool) {
+        guard let recognizer else { return }
+        task?.cancel()
+        taskGeneration += 1
+        let generation = taskGeneration
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.addsPunctuation = true
+        request.requiresOnDeviceRecognition = onDevice
+        usingOnDevice = onDevice
+        requestBox.request = request
+        task = recognizer.recognitionTask(with: request, resultHandler: Self.makeHandler { [weak self] text, isFinal, error in
+            self?.handleResult(text: text, isFinal: isFinal, error: error, generation: generation)
+        })
+    }
+
+    private func handleResult(text: String?, isFinal: Bool, error: Error?, generation: Int) {
+        guard generation == taskGeneration else { return }
+        if let text, !text.isEmpty { transcript = text }
+        if isFinal {
+            if phase == .finishing { deliver() }
             return
         }
-
-        task = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            let text = result?.bestTranscription.formattedString
-            let isFinal = result?.isFinal ?? false
-            let failed = error != nil
-            Task { @MainActor in
-                guard let self else { return }
-                if let text { self.transcript = text }
-                if isFinal || (failed && self.phase == .finishing) {
-                    self.deliver()
-                } else if failed, self.phase == .listening, self.transcript.isEmpty {
-                    // Recognition can error transiently while still listening; keep going.
-                }
+        guard let error else { return }
+        lastError = error
+        Log.error("Speech recognition error: \((error as NSError).domain) \((error as NSError).code) \(error.localizedDescription)")
+        switch phase {
+        case .listening:
+            if usingOnDevice, !retriedOnServer, transcript.isEmpty {
+                // On-device models can be missing; fall back to Apple's server recognizer.
+                retriedOnServer = true
+                startTask(onDevice: false)
+            } else if transcript.isEmpty {
+                fail(Self.friendly(error))
             }
+        case .finishing:
+            deliver()
+        default:
+            break
         }
     }
 
@@ -132,18 +158,27 @@ final class VoiceController {
         guard phase == .finishing else { return }
         finishTimeout?.cancel()
         let text = transcript.trimmed
+        let error = lastError
+        taskGeneration += 1
         cleanup()
+        if text.isEmpty {
+            fail(error.map(Self.friendly) ?? "Didn't catch that — hold the shortcut and try again.", resetAfter: 2.5)
+            return
+        }
         phase = .idle
         onFinished?(text)
     }
 
-    private func fail(_ message: String) {
+    private func fail(_ message: String, resetAfter: TimeInterval = 4) {
+        taskGeneration += 1
+        task?.cancel()
         stopAudio()
         cleanup()
         phase = .failed(message)
+        onFailed?()
         failureReset?.cancel()
         failureReset = Task { [weak self] in
-            try? await Task.sleep(for: .seconds(4))
+            try? await Task.sleep(for: .seconds(resetAfter))
             guard !Task.isCancelled, let self, case .failed = self.phase else { return }
             self.phase = .idle
         }
@@ -157,8 +192,40 @@ final class VoiceController {
 
     private func cleanup() {
         task = nil
-        request = nil
+        requestBox.request = nil
         recognizer = nil
+    }
+
+    nonisolated static func friendly(_ error: Error) -> String {
+        let ns = error as NSError
+        let text = ns.localizedDescription
+        if text.localizedCaseInsensitiveContains("dictation") || text.localizedCaseInsensitiveContains("siri") {
+            return "Turn on Dictation in System Settings › Keyboard to use voice."
+        }
+        if ns.code == 1110 { return "Didn't catch that — try again." }
+        if ns.code == 1101 || ns.code == 1107 { return "Speech service is busy — try again." }
+        return "Voice failed: \(text)"
+    }
+
+    /// Built outside the main actor: the audio engine calls this on its own thread.
+    nonisolated private static func makeTap(
+        box: RequestBox, onLevel: @escaping @MainActor (Float) -> Void
+    ) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            box.request?.append(buffer)
+            let level = rms(buffer)
+            Task { @MainActor in onLevel(level) }
+        }
+    }
+
+    nonisolated private static func makeHandler(
+        _ handler: @escaping @MainActor (String?, Bool, Error?) -> Void
+    ) -> (SFSpeechRecognitionResult?, Error?) -> Void {
+        { result, error in
+            let text = result?.bestTranscription.formattedString
+            let isFinal = result?.isFinal ?? false
+            Task { @MainActor in handler(text, isFinal, error) }
+        }
     }
 
     nonisolated private static func rms(_ buffer: AVAudioPCMBuffer) -> Float {
@@ -171,7 +238,7 @@ final class VoiceController {
         return max(0, min(1, (db + 50) / 50))
     }
 
-    static func ensurePermissions() async -> Bool {
+    nonisolated static func ensurePermissions() async -> Bool {
         let mic: Bool
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .authorized: mic = true
@@ -187,5 +254,16 @@ final class VoiceController {
             }
         default: return false
         }
+    }
+}
+
+/// Thread-safe holder so the audio thread always appends to the current request.
+private final class RequestBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _request: SFSpeechAudioBufferRecognitionRequest?
+
+    var request: SFSpeechAudioBufferRecognitionRequest? {
+        get { lock.withLock { _request } }
+        set { lock.withLock { _request = newValue } }
     }
 }

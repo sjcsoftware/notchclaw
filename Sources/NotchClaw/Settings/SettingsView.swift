@@ -300,6 +300,11 @@ private struct VoiceSettings: View {
                     ShortcutRecorder(app: app)
                 }
                 .disabled(!app.settings.pushToTalkEnabled)
+                if let error = app.hotKeyError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.callout)
+                }
                 Toggle("Send automatically when released", isOn: Binding(
                     get: { app.settings.autoSendVoice }, set: { app.settings.autoSendVoice = $0 }))
                 Picker("Language", selection: Binding(get: { app.settings.speechLocale }, set: { app.settings.speechLocale = $0 })) {
@@ -391,6 +396,7 @@ private struct ShortcutRecorder: View {
             }
             app.settings.pushToTalk = KeyCombo(keyCode: UInt32(event.keyCode), modifiers: carbon)
             stop()
+            app.applyHotKey()
             return nil
         }
     }
