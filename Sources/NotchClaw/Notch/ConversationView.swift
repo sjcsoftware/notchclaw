@@ -22,7 +22,9 @@ struct ConversationView: View {
         let session = app.session
         return ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 14) {
+                // A plain VStack: a lazy stack leaves freshly revealed rows blank when the
+                // scroll view grows to its measured height on appear.
+                VStack(alignment: .leading, spacing: 14) {
                     if session.items.isEmpty {
                         EmptyConversation(app: app)
                     }
@@ -38,7 +40,10 @@ struct ConversationView: View {
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.vertical, 4)
-                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { contentHeight = $0 }
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
+                    contentHeight = height
+                    app.notch.chatContentHeight = height
+                }
             }
             .scrollIndicators(.automatic)
             .defaultScrollAnchor(.bottom)
@@ -49,7 +54,13 @@ struct ConversationView: View {
             .onChange(of: session.items.count) { _, _ in
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            .onAppear { proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: contentHeight) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onAppear {
+                // Start at the last known height so the first frame is already full size.
+                if contentHeight == 0 { contentHeight = app.notch.chatContentHeight }
+                proxy.scrollTo("bottom", anchor: .bottom)
+                Task { @MainActor in proxy.scrollTo("bottom", anchor: .bottom) }
+            }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showsPendingThinking)
     }

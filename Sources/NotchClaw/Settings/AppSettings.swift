@@ -64,6 +64,8 @@ final class AppSettings {
     var showMenuBarIcon: Bool { didSet { defaults.set(showMenuBarIcon, forKey: "showMenuBarIcon") } }
     var hapticFeedback: Bool { didSet { defaults.set(hapticFeedback, forKey: "hapticFeedback") } }
     /// Fine-tuning for the minimized notch, in points, relative to the detected hardware notch.
+    /// Ask the gateway for `operator.admin` (needed for New session and Compact).
+    var requestAdminAccess: Bool { didSet { defaults.set(requestAdminAccess, forKey: "requestAdminAccess") } }
     var notchWidthAdjust: Double { didSet { defaults.set(notchWidthAdjust, forKey: "notchWidthAdjust") } }
     var notchHeightAdjust: Double { didSet { defaults.set(notchHeightAdjust, forKey: "notchHeightAdjust") } }
 
@@ -87,6 +89,7 @@ final class AppSettings {
         autoSendVoice = defaults.object(forKey: "autoSendVoice") as? Bool ?? true
         showMenuBarIcon = defaults.object(forKey: "showMenuBarIcon") as? Bool ?? true
         hapticFeedback = defaults.object(forKey: "hapticFeedback") as? Bool ?? true
+        requestAdminAccess = defaults.object(forKey: "requestAdminAccess") as? Bool ?? false
         notchWidthAdjust = defaults.object(forKey: "notchWidthAdjust") as? Double ?? 0
         notchHeightAdjust = defaults.object(forKey: "notchHeightAdjust") as? Double ?? 0
     }

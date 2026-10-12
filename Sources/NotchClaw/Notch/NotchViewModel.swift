@@ -65,6 +65,8 @@ final class NotchViewModel {
     var composerFocused = false
     var isPinned = false
     var isMenuOpen = false
+    /// Last measured transcript height, so the chat page opens at full size.
+    @ObservationIgnored var chatContentHeight: CGFloat = 0
     /// Asks the composer to take keyboard focus once it is on screen.
     var wantsComposerFocus = false
     /// True while the size tuner in Settings is visible: outlines the minimized notch.

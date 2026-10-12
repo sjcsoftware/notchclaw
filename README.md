@@ -137,7 +137,7 @@ NotchClaw opens **Settings** on first launch. You can reopen it any time with <k
 | Click the model name or **Model** | Switch models (from the gateway's catalog) |
 | **Effort** | Set reasoning effort (off → xhigh) |
 | **Compact** | Summarize old context; the ring shows how full the context window is |
-| **New session** | Reset the session |
+| **Sessions** | Start a new session, switch to a recent one, or reset the current one (reset needs admin) |
 | Click the usage meter | Choose the 5h, daily, or weekly Codex window |
 | <kbd>Esc</kbd> in chat | Clear the draft, or go back home |
 | Move the pointer away or click elsewhere | Minimize (the 📌 pin in chat keeps it open) |

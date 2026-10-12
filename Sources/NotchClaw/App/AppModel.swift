@@ -30,6 +30,8 @@ final class AppModel {
         notch.sizeAdjust = CGSize(width: settings.notchWidthAdjust, height: settings.notchHeightAdjust)
         session.isUserLooking = { [weak self] in self?.notch.isExpanded ?? false }
         session.onAssistantOutput = { [weak self] in self?.assistantProduced() }
+        session.onNeedsAdmin = { [weak self] in self?.openAdminSettings() }
+        session.onSwitchSession = { [weak self] key in self?.switchSession(to: key) }
         voice.onFinished = { [weak self] text in self?.handleTranscript(text) }
         voice.onFailed = { [weak self] in self?.voiceFailed() }
         hotKey.onPress = { [weak self] in self?.pushToTalkPressed() }
@@ -52,7 +54,21 @@ final class AppModel {
     }
 
     func applyConnectionSettings() {
+        gateway.setRequestAdmin(settings.requestAdminAccess)
         gateway.configure(urlString: settings.gatewayURL, token: settings.gatewayToken)
+    }
+
+    /// Points the app at another session and reloads its transcript.
+    func switchSession(to key: String) {
+        let previous = settings.resolvedSessionKey
+        settings.sessionKey = key
+        session.sessionChanged(from: previous)
+    }
+
+    /// Opens Settings on the Gateway tab, where admin access is explained and requested.
+    func openAdminSettings() {
+        settingsTab = .gateway
+        openSettings()
     }
 
     enum SettingsTab: Hashable { case gateway, agent, notch, voice }
@@ -81,7 +97,7 @@ final class AppModel {
     // MARK: Push-to-talk
 
     /// The last thing the user said, shown in the speech bubble under the agent until it replies.
-    internal(set) var spokenText: String?
+    var spokenText: String?
     @ObservationIgnored private var expandedForVoice = false
     @ObservationIgnored private var bubbleTask: Task<Void, Never>?
 
@@ -161,7 +177,7 @@ final class AppModel {
         case .compact:
             session.compact()
         case .newSession:
-            session.newSession()
+            session.createSession()
         case .setEffort(let level):
             session.setThinking(level)
         case .setModel(let query):

@@ -35,6 +35,33 @@ enum SnapshotRenderer {
             app.spokenText = "Compare my last three months of cloud spend"
             app.session.activity = .thinking(phase: "Gathering context")
         }
+        // Chat with a syntax-highlighted code reply.
+        scene(url, "code", height: 470) { app in
+            app.notch.expand(page: .chat)
+            app.session.items = [
+                ChatItem(id: "1", role: .user, text: "Write a quick Python function that inverts a binary tree."),
+                ChatItem(id: "2", role: .assistant, text: """
+                ### Invert a Binary Tree
+
+                ```python
+                from typing import Optional
+
+                @dataclass
+                class Node:
+                    value: int
+                    left: Optional["Node"] = None
+                    right: Optional["Node"] = None
+
+                def inverse(root: Optional[Node]) -> Optional[Node]:
+                    \"\"\"Swap left/right children at every node.\"\"\"
+                    if root is None:
+                        return None  # empty subtree
+                    root.left, root.right = inverse(root.right), inverse(root.left)
+                    return root
+                ```
+                """),
+            ]
+        }
         // Chat with a rich Markdown reply and a native chart.
         scene(url, "chat", height: 580) { app in
             app.notch.expand(page: .chat)
@@ -150,6 +177,74 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_SESSIONS_TEST"] != nil {
+            // Exercises list → create → switch back against the mock gateway.
+            Task {
+                while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
+                try? await Task.sleep(for: .seconds(1))
+                print("START key=\(model.settings.resolvedSessionKey) title=\(model.session.currentSessionTitle) list=\(model.session.sessions.map(\.title))")
+                model.session.createSession()
+                try? await Task.sleep(for: .seconds(2))
+                print("CREATED key=\(model.settings.resolvedSessionKey) title=\(model.session.currentSessionTitle) list=\(model.session.sessions.map(\.title)) toast=\(model.session.toast ?? "-")")
+                model.session.switchSession(to: "agent:main:main")
+                try? await Task.sleep(for: .seconds(1.5))
+                print("SWITCHED key=\(model.settings.resolvedSessionKey) title=\(model.session.currentSessionTitle) items=\(model.session.items.count)")
+                model.settings.sessionKey = "main"
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
+        if let method = ProcessInfo.processInfo.environment["NOTCHCLAW_DEBUG_RPC"] {
+            // Calls one RPC and writes the raw result (for checking payload shapes).
+            Task {
+                while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
+                let params = ProcessInfo.processInfo.environment["NOTCHCLAW_DEBUG_PARAMS"]
+                    .flatMap { try? JSON.decode(Data($0.utf8)) } ?? .object([:])
+                let out = ProcessInfo.processInfo.environment["NOTCHCLAW_DEBUG_OUT"] ?? "/dev/stdout"
+                do {
+                    let result = try await model.gateway.request(method, params, timeout: 30)
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                    try encoder.encode(result).write(to: URL(fileURLWithPath: out))
+                    print("RPC OK \(out)")
+                } catch {
+                    print("RPC ERROR \(error)")
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
+        if let approvalFile = ProcessInfo.processInfo.environment["NOTCHCLAW_ADMIN_TEST"] {
+            // Walks the admin-upgrade flow against the mock gateway and prints each state.
+            Task {
+                var last = ""
+                @MainActor func report(_ tag: String) {
+                    let line = "\(model.gateway.state) admin=\(model.gateway.adminAccess) hasAdmin=\(model.gateway.hasAdmin)"
+                    if line != last { print("\(tag) \(line)"); last = line }
+                }
+                model.session.resetSession()  // before approval: should be refused politely
+                for tick in 0..<80 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    report("T\(tick)")
+                    if tick == 6 {
+                        model.session.resetSession()
+                        print("TOAST \(model.session.toast ?? "-")")
+                    }
+                    if tick == 10 { FileManager.default.createFile(atPath: approvalFile, contents: Data()); print("APPROVED") }
+                    if model.gateway.hasAdmin, model.gateway.state.isConnected {
+                        model.session.resetSession()
+                        try? await Task.sleep(for: .seconds(1.5))
+                        print("TOAST \(model.session.toast ?? "-")")
+                        break
+                    }
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["NOTCHCLAW_CHECK_IMAGES"] != nil {
             // Loads history the normal way and reports which agent images actually decode.
             Task {

@@ -82,6 +82,8 @@ struct NotchHeader: View {
             ModelTag(app: app)
             Spacer(minLength: app.notch.geometry.notchWidth + 16)
             UsageCluster(app: app)
+                .fixedSize()
+                .layoutPriority(2)
         }
         .frame(height: 26)
     }
@@ -221,10 +223,14 @@ struct UsageCluster: View {
         let window = usage.bestWindow(for: app.settings.usageWindow)
         let percent = window?.usedPercent ?? 0
         return HStack(spacing: 7) {
+            OpenAIMark(size: 12)
+                .foregroundStyle(.white.opacity(0.85))
             Text("\(Int(percent))%")
                 .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
                 .foregroundStyle(.white.opacity(0.9))
                 .contentTransition(.numericText(value: percent))
+                .lineLimit(1)
+                .fixedSize()
             UsageBar(percent: percent, width: 58, height: 5)
         }
         .padding(.vertical, 4)

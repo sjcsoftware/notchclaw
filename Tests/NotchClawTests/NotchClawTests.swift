@@ -196,3 +196,67 @@ struct NotchSizeTests {
         #expect(notch.closedSize.width >= 40 && notch.closedSize.height >= 8)
     }
 }
+
+struct SyntaxHighlighterTests {
+    private func kinds(_ code: String, _ lang: String) -> [(String, SyntaxHighlighter.Kind)] {
+        SyntaxHighlighter.tokenize(code, language: SyntaxHighlighter.language(for: lang)!)
+            .filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { ($0.text.trimmingCharacters(in: .whitespaces), $0.kind) }
+    }
+
+    @Test func testPythonFunction() {
+        let tokens = kinds("def inverse(root):\n    if root is None:\n        return None  # done\n    s = \"x\"\n", "python")
+        func kind(of word: String) -> SyntaxHighlighter.Kind? { tokens.first { $0.0 == word }?.1 }
+        #expect(kind(of: "def") == .keyword)
+        #expect(kind(of: "inverse") == .function)
+        #expect(kind(of: "None") == .literal)
+        #expect(tokens.contains { $0.0 == "# done" && $0.1 == .comment })
+        #expect(tokens.contains { $0.0 == "\"x\"" && $0.1 == .string })
+    }
+
+    @Test func testTripleQuotesSwiftTypesAndNumbers() {
+        let py = kinds("x = \"\"\"multi\nline\"\"\"\n", "py")
+        #expect(py.contains { $0.0.hasPrefix("\"\"\"multi") && $0.1 == .string })
+        let swift = kinds("let n: Int = 42 // answer\n@MainActor func go() {}", "swift")
+        #expect(swift.contains { $0.0 == "Int" && $0.1 == .type })
+        #expect(swift.contains { $0.0 == "42" && $0.1 == .number })
+        #expect(swift.contains { $0.0 == "@MainActor" && $0.1 == .decorator })
+        #expect(swift.contains { $0.0 == "go" && $0.1 == .function })
+    }
+
+    @Test func testJSONKeysShellVariablesAndUnknownLanguages() {
+        let json = kinds("{\"name\": \"claw\", \"n\": 1}", "json")
+        #expect(json.contains { $0.0 == "\"name\"" && $0.1 == .key })
+        #expect(json.contains { $0.0 == "\"claw\"" && $0.1 == .string })
+        let sh = kinds("echo $HOME # where", "bash")
+        #expect(sh.contains { $0.0 == "$HOME" && $0.1 == .variable })
+        #expect(sh.contains { $0.0 == "# where" && $0.1 == .comment })
+        #expect(SyntaxHighlighter.language(for: "brainfuck") == nil)
+        #expect(SyntaxHighlighter.language(for: nil) == nil)
+    }
+}
+
+struct AdminScopeTests {
+    @Test func testDetectsMissingAdminScopeErrors() {
+        let structured = GatewayError(frame: ["code": "FORBIDDEN", "message": "missing scope: operator.admin",
+                                              "details": ["code": "MISSING_SCOPE", "missingScope": "operator.admin"]])
+        #expect(AgentSession.isMissingAdmin(structured))
+        let legacy = GatewayError(code: "INVALID_REQUEST", message: "Reset failed: missing scope: operator.admin")
+        #expect(AgentSession.isMissingAdmin(legacy))
+        #expect(!AgentSession.isMissingAdmin(GatewayError(code: "FORBIDDEN", message: "missing scope: operator.pairing")))
+        #expect(!AgentSession.isMissingAdmin(GatewayError.notConnected))
+    }
+}
+
+struct SessionPickerTests {
+    @Test func testSessionTitlesAndBackgroundFiltering() {
+        #expect(SessionSummary.title(forKey: "agent:main:main") == "Main")
+        #expect(SessionSummary.title(forKey: "main") == "Main")
+        #expect(SessionSummary.title(forKey: "agent:main:s-abc") == "s-abc")
+        #expect(SessionSummary.title(for: ["key": "agent:main:x", "derivedTitle": "Trip planning"]) == "Trip planning")
+        #expect(SessionSummary.title(for: ["key": "agent:main:x", "label": "Work", "derivedTitle": "Ignored"]) == "Work")
+        #expect(AgentSession.isBackgroundSession(["key": "agent:main:subagent:123"]))
+        #expect(AgentSession.isBackgroundSession(["key": "agent:main:x", "spawnedBy": "agent:main:main"]))
+        #expect(!AgentSession.isBackgroundSession(["key": "agent:main:main"]))
+    }
+}

@@ -49,10 +49,12 @@ struct HomeView: View {
                         notch.showChat(focusComposer: true)
                     }
                     .help("Open the conversation")
-                    HomeAction(icon: "square.and.pencil", tint: NotchPalette.siri[4], title: "New session") {
-                        session.newSession()
+                    HomeAction(icon: "rectangle.stack.fill", tint: NotchPalette.siri[4],
+                               title: session.currentSessionTitle, menu: true) {
+                        SessionMenu.show(app)
                     }
-                    .help("Reset the session and start fresh")
+                    .help("Session: switch, start new, or reset")
+                    .accessibilityLabel("Session: \(session.currentSessionTitle)")
                     HomeAction(icon: "gearshape.fill", tint: .white.opacity(0.75), title: "Settings") {
                         app.openSettings()
                     }
@@ -374,5 +376,39 @@ private struct BubbleTail: Shape {
         p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
         p.closeSubpath()
         return p
+    }
+}
+
+/// Native session picker: start new, reset current, or jump to a recent session.
+@MainActor
+enum SessionMenu {
+    static func show(_ app: AppModel) {
+        let session = app.session
+        var entries: [PopupMenu.Entry] = [
+            .item("New session") { session.createSession() },
+        ]
+        if app.gateway.hasAdmin {
+            entries.append(.item("Reset \u{201C}\(session.currentSessionTitle)\u{201D}") { session.resetSession() })
+        } else {
+            entries.append(.item("Reset \u{201C}\(session.currentSessionTitle)\u{201D} (needs admin)\u{2026}") { app.openAdminSettings() })
+        }
+        entries.append(.separator)
+        entries.append(.header("Sessions"))
+        let rows = session.sessions
+        if rows.isEmpty {
+            entries.append(.item(SessionSummary.title(forKey: session.sessionKey), checked: true) {})
+        }
+        for row in rows {
+            let current = AgentSession.matches(row.key, session.sessionKey)
+            entries.append(.item(label(for: row), checked: current) { session.switchSession(to: row.key) })
+        }
+        session.loadSessions()  // refresh for next time
+        PopupMenu.show(entries)
+    }
+
+    private static func label(for row: SessionSummary) -> String {
+        let title = row.title.count > 40 ? String(row.title.prefix(39)) + "\u{2026}" : row.title
+        guard let updated = row.updatedAt else { return title }
+        return "\(title)  \u{00B7}  \(updated.formatted(.relative(presentation: .named, unitsStyle: .abbreviated)))"
     }
 }

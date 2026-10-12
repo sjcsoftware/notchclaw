@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.0
+- **Session picker.** The home screen's session tile shows the current session; click it to start a **New session** (no admin needed), jump to a recent session, or reset the current one (admin).
+- The usage meter in the header now reads **OpenAI mark · percent · bar**.
+- Session lists skip sub-agent and cron sessions and use parameters older gateways accept.
+
+## 0.5.2
+- Fix: opening Chat from the home screen no longer shows a black panel until you scroll.
+- New session and Compact need OpenClaw's `operator.admin` scope. **Settings › Gateway › Admin access** can now request it, shows the exact `openclaw devices approve` command to run on the gateway host, keeps NotchClaw working on its current access while approval is pending, and switches over automatically once approved. Without admin, those buttons explain what's needed instead of failing.
+
+## 0.5.1
+- Syntax highlighting in code blocks: keywords, strings, numbers, comments, types, functions, built-ins, and decorators, for Python, Swift, JavaScript/TypeScript, shell, JSON, Go, Rust, C-family, Java/Kotlin, Ruby, SQL, YAML, CSS, PHP, and Lua. Unknown languages stay plain.
+
 ## 0.5.0
 - The minimized notch opens only when the pointer is actually inside it (edges included), not when it passes nearby.
 - New **Settings › Notch › Minimized notch size** tuner: adjust width and height with sliders or steppers and watch the notch resize live, outlined in blue, to match your Mac's hardware notch.

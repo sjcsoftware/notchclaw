@@ -68,6 +68,24 @@ final class GatewayClient {
     private(set) var networkAvailable = true
     private(set) var lastError: String?
 
+    /// Whether this device holds `operator.admin` (needed for New session and Compact).
+    enum AdminAccess: Equatable {
+        case off
+        /// Requested; waiting for `openclaw devices approve <requestId>` on the gateway host.
+        case pending(requestId: String?)
+        case granted
+    }
+    private(set) var adminAccess: AdminAccess = .off
+    nonisolated static let adminScope = "operator.admin"
+    @ObservationIgnored private var requestAdmin = false
+    @ObservationIgnored private var attemptIncludedAdmin = false
+    @ObservationIgnored private var adminProbeTask: Task<Void, Never>?
+    /// Whether this gateway has accepted this device before (persisted per gateway URL).
+    private var wasPairedBefore: Bool {
+        get { UserDefaults.standard.bool(forKey: "paired:" + gatewayKey) }
+        set { UserDefaults.standard.set(newValue, forKey: "paired:" + gatewayKey) }
+    }
+
     @ObservationIgnored var onEvent: ((String, JSON) -> Void)?
     @ObservationIgnored var onConnected: (() -> Void)?
 
@@ -123,6 +141,18 @@ final class GatewayClient {
             connectNow()
         }
     }
+
+    /// Opts in or out of requesting `operator.admin`. Reconnects so the new scope set applies.
+    func setRequestAdmin(_ enabled: Bool) {
+        guard enabled != requestAdmin else { return }
+        requestAdmin = enabled
+        adminProbeTask?.cancel()
+        adminProbeTask = nil
+        adminAccess = .off  // Re-derived from the next handshake.
+        reconnectNow(reason: enabled ? "admin requested" : "admin dropped")
+    }
+
+    var hasAdmin: Bool { grantedScopes.contains(Self.adminScope) }
 
     func stop() {
         wantsConnection = false
@@ -199,12 +229,16 @@ final class GatewayClient {
         do {
             let (nonce, ts) = try await waitForChallenge(timeout: 12)
             guard gen == generation else { return }
-            let hello = try await send("connect", connectParams(nonce: nonce, signedAt: ts), on: ws, timeout: 20)
+            let scopes = currentScopes()
+            attemptIncludedAdmin = scopes.contains(Self.adminScope)
+            let params = connectParams(nonce: nonce, signedAt: ts, scopes: scopes)
+            let hello = try await send("connect", params, on: ws, timeout: 20)
             guard gen == generation else { return }
             applyHello(hello)
             attempt = 0
             lastError = nil
             state = .connected
+            wasPairedBefore = true
             startWatchdog()
             Log.info("Connected to gateway \(serverVersion ?? "?")")
             onConnected?()
@@ -214,11 +248,18 @@ final class GatewayClient {
         }
     }
 
-    private func connectParams(nonce: String, signedAt: Int64) -> JSON {
+    /// Base scopes plus admin when requested, unless an admin upgrade is still awaiting approval.
+    private func currentScopes() -> [String] {
+        guard requestAdmin else { return Self.scopes }
+        if case .pending = adminAccess { return Self.scopes }
+        return Self.scopes + [Self.adminScope]
+    }
+
+    private func connectParams(nonce: String, signedAt: Int64, scopes: [String], recordAuth: Bool = true) -> JSON {
         let identity = store.identity
         let stored = store.deviceToken(for: gatewayKey)
         let authToken = token.nonEmpty ?? stored?.token
-        usedStoredDeviceToken = token.nonEmpty == nil && stored != nil
+        if recordAuth { usedStoredDeviceToken = token.nonEmpty == nil && stored != nil }
 
         var params: [String: JSON] = [
             "minProtocol": .int(Self.protocolVersion),
@@ -233,7 +274,7 @@ final class GatewayClient {
                 "instanceId": .string(InstanceID.value),
             ],
             "role": .string(Self.role),
-            "scopes": JSON(Self.scopes),
+            "scopes": JSON(scopes),
             "caps": JSON(Self.caps),
             "locale": .string(Locale.preferredLanguages.first ?? "en-US"),
             "userAgent": .string("NotchClaw/\(AppInfo.version)"),
@@ -243,7 +284,7 @@ final class GatewayClient {
         }
         let payload = DeviceAuthPayload.v2(
             deviceId: identity.deviceId, clientId: Self.clientId, clientMode: Self.clientMode,
-            role: Self.role, scopes: Self.scopes, signedAtMs: signedAt, token: authToken, nonce: nonce)
+            role: Self.role, scopes: scopes, signedAtMs: signedAt, token: authToken, nonce: nonce)
         if let signature = identity.sign(payload), let publicKey = identity.publicKeyBase64Url {
             params["device"] = [
                 "id": .string(identity.deviceId),
@@ -262,6 +303,16 @@ final class GatewayClient {
         if let ms = hello["policy"]?["tickIntervalMs"]?.double, ms > 0 {
             tickInterval = ms / 1000
         }
+        if grantedScopes.contains(Self.adminScope) {
+            adminAccess = .granted
+            adminProbeTask?.cancel()
+        } else if !requestAdmin {
+            adminAccess = .off
+        } else if attemptIncludedAdmin {
+            // Asked for admin but the gateway connected us without it: treat as awaiting approval.
+            adminAccess = .pending(requestId: nil)
+            startAdminProbe()
+        }
         if let deviceToken = hello["auth"]?["deviceToken"]?.text {
             store.setDeviceToken(
                 StoredDeviceToken(
@@ -279,8 +330,16 @@ final class GatewayClient {
         teardown(error: error)
         Log.error("Connect failed: \(gwError?.code ?? "") \(detail) \(message)")
 
+        let requestId = gwError?.details?["requestId"]?.string
+        if (detail == "PAIRING_REQUIRED" || gwError?.code == "NOT_PAIRED"), attemptIncludedAdmin, wasPairedBefore {
+            // An admin *upgrade* is pending. Keep working with the existing approval meanwhile.
+            adminAccess = .pending(requestId: requestId)
+            startAdminProbe()
+            scheduleReconnect(after: 0.1)
+            return
+        }
         if detail == "PAIRING_REQUIRED" || gwError?.code == "NOT_PAIRED" {
-            state = .pairingRequired(requestId: gwError?.details?["requestId"]?.string)
+            state = .pairingRequired(requestId: requestId)
             scheduleReconnect(after: 3)
             return
         }
@@ -457,6 +516,92 @@ final class GatewayClient {
 
     private func failPending(_ id: String, _ error: Error) {
         pending.removeValue(forKey: id)?.resume(throwing: error)
+    }
+
+    // MARK: Admin upgrade
+
+    private enum ProbeOutcome { case granted, pending(String?), failed }
+
+    /// While an admin upgrade awaits approval, periodically try a separate short-lived
+    /// connection with admin scopes; once it succeeds, reconnect the main socket with admin.
+    private func startAdminProbe() {
+        guard adminProbeTask == nil || adminProbeTask?.isCancelled == true else { return }
+        adminProbeTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(6))
+                guard let self, !Task.isCancelled, self.requestAdmin else { return }
+                guard case .pending = self.adminAccess else { return }
+                switch await self.probeAdmin() {
+                case .granted:
+                    Log.info("Admin access approved")
+                    self.adminAccess = .granted
+                    self.adminProbeTask = nil
+                    self.reconnectNow(reason: "admin approved")
+                    return
+                case .pending(let id):
+                    if let id { self.adminAccess = .pending(requestId: id) }
+                case .failed:
+                    break
+                }
+            }
+        }
+    }
+
+    private func probeAdmin() async -> ProbeOutcome {
+        guard let url else { return .failed }
+        let ws = session.webSocketTask(with: URLRequest(url: url))
+        ws.resume()
+        defer { ws.cancel(with: .goingAway, reason: nil) }
+        do {
+            var challenge: (String, Int64)?
+            while challenge == nil {
+                let frame = try await Self.receiveFrame(ws, timeout: 10)
+                if frame["event"]?.string == "connect.challenge", let nonce = frame["payload"]?["nonce"]?.text,
+                   let ts = frame["payload"]?["ts"]?.int {
+                    challenge = (nonce, ts)
+                }
+            }
+            guard let (nonce, ts) = challenge else { return .failed }
+            let id = UUID().uuidString
+            let params = connectParams(nonce: nonce, signedAt: ts, scopes: Self.scopes + [Self.adminScope], recordAuth: false)
+            let request: JSON = ["type": "req", "id": .string(id), "method": "connect", "params": params]
+            try await ws.send(.string(String(decoding: try request.encoded(), as: UTF8.self)))
+            while true {
+                let frame = try await Self.receiveFrame(ws, timeout: 15)
+                guard frame["type"]?.string == "res", frame["id"]?.string == id else { continue }
+                if frame["ok"]?.bool == true {
+                    let scopes = frame["payload"]?["auth"]?["scopes"]?.array?.compactMap(\.string) ?? []
+                    return scopes.contains(Self.adminScope) ? .granted : .pending(nil)
+                }
+                let error = GatewayError(frame: frame["error"])
+                if error.detailCode == "PAIRING_REQUIRED" || error.code == "NOT_PAIRED" {
+                    return .pending(error.details?["requestId"]?.string)
+                }
+                return .failed
+            }
+        } catch {
+            return .failed
+        }
+    }
+
+    nonisolated private static func receiveFrame(_ ws: URLSessionWebSocketTask, timeout: TimeInterval) async throws -> JSON {
+        try await withThrowingTaskGroup(of: JSON.self) { group in
+            group.addTask {
+                let message = try await ws.receive()
+                switch message {
+                case .string(let s): return try JSON.decode(Data(s.utf8))
+                case .data(let d): return try JSON.decode(d)
+                @unknown default: return .null
+                }
+            }
+            group.addTask {
+                try await Task.sleep(for: .seconds(timeout))
+                throw GatewayError.timeout("Admin check")
+            }
+            let first = try await group.next() ?? .null
+            group.cancelAll()
+            return first
+        }
     }
 
     // MARK: Liveness

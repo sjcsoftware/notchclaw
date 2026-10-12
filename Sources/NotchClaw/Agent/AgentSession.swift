@@ -14,13 +14,13 @@ final class AgentSession {
         + "\"data\":[{\"x\":\"Mon\",\"y\":3,\"series\":\"optional\"}]}. When a picture is requested or would "
         + "clearly help, use your image generation tool. Keep it skimmable.</notchclaw-format>"
 
-    internal(set) var items: [ChatItem] = []
-    internal(set) var activity: AgentActivity = .idle
-    internal(set) var attention: AttentionReason?
+    var items: [ChatItem] = []
+    var activity: AgentActivity = .idle
+    var attention: AttentionReason?
     private(set) var approvals: [PendingApproval] = []
-    internal(set) var usage: UsageInfo?
+    var usage: UsageInfo?
     private(set) var models: [ModelOption] = []
-    internal(set) var sessionSettings = SessionSettings()
+    var sessionSettings = SessionSettings()
     private(set) var toast: String?
     private(set) var historyLoaded = false
     /// Decoded agent images keyed by attachment id.
@@ -37,6 +37,13 @@ final class AgentSession {
     /// Lets the UI suppress attention while the user is already looking.
     @ObservationIgnored var isUserLooking: () -> Bool = { false }
     @ObservationIgnored var onAttention: ((AttentionReason) -> Void)?
+    /// Recent sessions for the picker (newest first).
+    private(set) var sessions: [SessionSummary] = []
+    @ObservationIgnored private var sessionsReload: Task<Void, Never>?
+    /// Switches the app to another session key (owned by AppModel, which persists the choice).
+    @ObservationIgnored var onSwitchSession: ((String) -> Void)?
+    /// Asked when an action needs `operator.admin` that this device doesn't have.
+    @ObservationIgnored var onNeedsAdmin: (() -> Void)?
     /// Fired when the agent starts producing (or finishes) visible reply text.
     @ObservationIgnored var onAssistantOutput: (() -> Void)?
 
@@ -65,10 +72,14 @@ final class AgentSession {
         refreshSessionSettings()
         loadModels()
         refreshUsage()
+        loadSessions()
     }
 
     /// Called when the configured session key changes.
-    func sessionChanged() {
+    func sessionChanged(from previousKey: String? = nil) {
+        if let previousKey, gateway.state.isConnected {
+            Task { _ = try? await gateway.request("sessions.messages.unsubscribe", ["key": .string(previousKey)], timeout: 10) }
+        }
         items.removeAll()
         activity = .idle
         activeRunId = nil
@@ -230,6 +241,7 @@ final class AgentSession {
             showToast("Wait for the current reply to finish")
             return
         }
+        guard requireAdmin(for: "Compact") else { return }
         activity = .compacting
         Task {
             do {
@@ -237,23 +249,112 @@ final class AgentSession {
                 showToast("Context compacted")
                 refreshSessionSettings()
             } catch {
-                showToast("Compaction failed: \(error.localizedDescription)")
+                if Self.isMissingAdmin(error) { adminMissing("Compact") } else {
+                    showToast("Compaction failed: \(error.localizedDescription)")
+                }
             }
             if activity == .compacting { activity = .idle }
         }
     }
 
-    func newSession() {
+    // MARK: Sessions
+
+    var currentSessionTitle: String {
+        sessions.first { Self.matches($0.key, sessionKey) }?.title ?? SessionSummary.title(forKey: sessionKey)
+    }
+
+    func loadSessions() {
+        guard gateway.state.isConnected else { return }
+        Task {
+            guard let result = try? await gateway.request(
+                "sessions.list",
+                // Only long-standing params, so older gateways accept the request too.
+                ["limit": 25, "sortBy": "updatedAt"],
+                timeout: 20)
+            else { return }
+            sessions = Array((result["sessions"]?.array ?? []).compactMap { row -> SessionSummary? in
+                guard let key = row["key"]?.text, row["archived"]?.bool != true, !Self.isBackgroundSession(row) else {
+                    return nil
+                }
+                let updated = row["updatedAt"]?.double.map { Date(timeIntervalSince1970: $0 / 1000) }
+                return SessionSummary(key: key, title: SessionSummary.title(for: row), updatedAt: updated)
+            }.prefix(15))
+        }
+    }
+
+    /// Sub-agent, cron, and other spawned sessions aren't conversations to pick from.
+    nonisolated static func isBackgroundSession(_ row: JSON) -> Bool {
+        let key = (row["key"]?.string ?? "").lowercased()
+        if key.contains(":subagent:") || key.contains(":cron:") || key.hasPrefix("cron:") { return true }
+        return row["spawnedBy"]?.text != nil || row["parentSessionKey"]?.text != nil
+    }
+
+    /// Starts a brand-new session (no admin needed) and switches to it.
+    func createSession() {
+        guard gateway.state.isConnected else {
+            showToast("Not connected")
+            return
+        }
+        Task {
+            do {
+                let result = try await gateway.request(
+                    "sessions.create", ["idempotencyKey": .string(UUID().uuidString.lowercased())], timeout: 30)
+                guard let key = result["key"]?.text ?? result["entry"]?["key"]?.text else {
+                    showToast("The gateway didn't return a session")
+                    return
+                }
+                onSwitchSession?(key)
+                showToast("Started a new session")
+                loadSessions()
+            } catch {
+                showToast("Couldn't start a session: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func switchSession(to key: String) {
+        guard !Self.matches(key, sessionKey) else { return }
+        onSwitchSession?(key)
+    }
+
+    /// Clears the current session in place (requires admin).
+    func resetSession() {
+        guard requireAdmin(for: "Reset session") else { return }
         Task {
             do {
                 _ = try await gateway.request("sessions.reset", ["key": .string(sessionKey)], timeout: 30)
                 items.removeAll()
-                showToast("Started a fresh session")
+                showToast("Session cleared")
                 refreshSessionSettings()
             } catch {
-                showToast("Reset failed: \(error.localizedDescription)")
+                if Self.isMissingAdmin(error) { adminMissing("Reset session") } else {
+                    showToast("Reset failed: \(error.localizedDescription)")
+                }
             }
         }
+    }
+
+    /// OpenClaw only lets admin devices reset or compact a session.
+    private func requireAdmin(for action: String) -> Bool {
+        guard gateway.state.isConnected, !gateway.hasAdmin else { return true }
+        adminMissing(action)
+        return false
+    }
+
+    private func adminMissing(_ action: String) {
+        if case .pending = gateway.adminAccess {
+            showToast("\(action) needs admin access — approve it on your gateway")
+        } else {
+            showToast("\(action) needs admin access — see Settings › Gateway")
+        }
+        onNeedsAdmin?()
+    }
+
+    nonisolated static func isMissingAdmin(_ error: Error) -> Bool {
+        guard let error = error as? GatewayError else { return false }
+        if error.details?["missingScope"]?.string == GatewayClient.adminScope { return true }
+        return error.code == "FORBIDDEN" && error.message.contains("operator.admin")
+            || error.message.localizedCaseInsensitiveContains("missing scope: operator.admin")
     }
 
     func resolveApproval(_ approval: PendingApproval, decision: String) {
@@ -326,6 +427,12 @@ final class AgentSession {
         case "sessions.changed":
             if let row = payload["session"], Self.matches(row["key"]?.string, sessionKey) {
                 sessionSettings.merge(row: row)
+            }
+            sessionsReload?.cancel()
+            sessionsReload = Task {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                loadSessions()
             }
         default:
             break
