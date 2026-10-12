@@ -145,6 +145,51 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_CHECK_IMAGES"] != nil {
+            // Loads history the normal way and reports which agent images actually decode.
+            Task {
+                while !model.session.historyLoaded { try? await Task.sleep(for: .milliseconds(200)) }
+                let attachments = model.session.items.flatMap(\.images)
+                print("ATTACHMENTS \(attachments.count)")
+                attachments.forEach(model.session.loadImage)
+                for _ in 0..<60 where model.session.images.count < attachments.count {
+                    try? await Task.sleep(for: .milliseconds(500))
+                }
+                for attachment in attachments {
+                    let size = model.session.images[attachment.id]?.size
+                    print("IMAGE \(attachment.id.prefix(48)) -> \(size.map { "\(Int($0.width))x\(Int($0.height))" } ?? "NOT LOADED")")
+                }
+                if let out = ProcessInfo.processInfo.environment["NOTCHCLAW_CHECK_IMAGES_PNG"] {
+                    model.notch.expand(page: .chat)
+                    model.session.items = Array(model.session.items.suffix(2))
+                    let view = NotchRootView(app: model).frame(width: 760, height: 640)
+                        .background(Color(white: 0.3)).environment(\.notchSnapshot, true)
+                    let renderer = ImageRenderer(content: view)
+                    renderer.scale = 2
+                    if let image = renderer.nsImage, let data = ImageExport.pngData(image) {
+                        try? data.write(to: URL(fileURLWithPath: out))
+                    }
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
+        if let path = ProcessInfo.processInfo.environment["NOTCHCLAW_DUMP_HISTORY"] {
+            // Writes the raw chat.history payload for inspecting message/attachment shapes.
+            Task {
+                while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
+                let result = try? await model.gateway.request(
+                    "chat.history", ["sessionKey": .string(model.session.sessionKey), "limit": 8], timeout: 30)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                try? encoder.encode(result ?? .null).write(to: URL(fileURLWithPath: path))
+                print("DUMPED \(path)")
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         guard let text = ProcessInfo.processInfo.environment["NOTCHCLAW_AUTOSEND"] else { return }
         Task {
             while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }

@@ -1,6 +1,7 @@
 # Changelog
 
-## Unreleased
+## 0.4.1
+- Fix: agent-generated images now display. Managed images arrive as short-lived media-ticket URLs, which NotchClaw now fetches from the gateway origin (renewing an expired ticket once); attachments missing from live events are recovered from the transcript.
 - Relicensed under GPL-3.0 (previously MIT).
 - README: table of contents.
 

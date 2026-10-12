@@ -170,3 +170,14 @@ struct RichContentTests {
         #expect(MessageText.extract(message) == "Here you go")
     }
 }
+
+struct MediaURLTests {
+    @Test func testMediaTicketResolvesAgainstGatewayOrigin() {
+        let gateway = URL(string: "wss://pi5.example.ts.net/control")!
+        let resolved = GatewayClient.httpURL(gateway: gateway, path: "/api/chat/media/outgoing/agent%3Amain%3Amain/abc/full?mediaTicket=v1.x")
+        #expect(resolved?.absoluteString == "https://pi5.example.ts.net/api/chat/media/outgoing/agent%3Amain%3Amain/abc/full?mediaTicket=v1.x")
+        let local = GatewayClient.httpURL(gateway: URL(string: "ws://127.0.0.1:18789")!, path: "/api/x?t=1")
+        #expect(local?.absoluteString == "http://127.0.0.1:18789/api/x?t=1")
+        #expect(GatewayClient.httpURL(gateway: gateway, path: "https://cdn.example.com/a.png")?.host == "cdn.example.com")
+    }
+}

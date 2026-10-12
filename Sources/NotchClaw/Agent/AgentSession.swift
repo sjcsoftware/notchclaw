@@ -99,8 +99,10 @@ final class AgentSession {
             let attachments = role == "assistant" ? MessageText.images(message) : []
             guard !text.isEmpty || !attachments.isEmpty else { continue }
             if role == "user" { text = MessageText.stripInstruction(text) }
-            let id = message["id"]?.string ?? message["messageId"]?.string ?? "h\(index)"
+            let meta = message["__openclaw"]
+            let id = meta?["id"]?.string ?? message["id"]?.string ?? message["messageId"]?.string ?? "h\(index)"
             var item = ChatItem(id: id, role: role == "user" ? .user : .assistant, text: text, images: attachments)
+            item.runId = meta?["runId"]?.string
             if let ts = message["timestamp"]?.double ?? message["ts"]?.double {
                 item.date = Date(timeIntervalSince1970: ts > 1e12 ? ts / 1000 : ts)
             }
@@ -354,9 +356,11 @@ final class AgentSession {
             activeRunId = runId
             let delta = p["deltaText"]?.string ?? ""
             let snapshot = p["message"].flatMap(MessageText.extract)
+            let snapshotImages = p["message"].map(MessageText.images) ?? []
             let replace = p["replace"]?.bool == true
             upsertAssistant(runId: runId) { item in
                 if let snapshot { item.text = snapshot }
+                if !snapshotImages.isEmpty { item.images = Self.uniqueImages(item.images + snapshotImages) }
                 else if replace { item.text = delta }
                 else { item.text += delta }
             }
@@ -375,6 +379,7 @@ final class AgentSession {
             finishRun(runId)
             if items.last?.role == .assistant { onAssistantOutput?() }
             raiseAttention(.reply)
+            reconcileAttachments()
             refreshUsage()
             refreshSessionSettings()
         case "aborted":
@@ -432,16 +437,75 @@ final class AgentSession {
         imageLoads.insert(attachment.id)
         Task {
             defer { imageLoads.remove(attachment.id) }
-            do {
-                let result = try await gateway.request(
-                    "artifacts.download",
-                    ["sessionKey": .string(sessionKey), "artifactId": .string(artifactId)],
-                    timeout: 30)
-                if let base64 = result["data"]?.string, let data = Data(base64Encoded: base64), let image = NSImage(data: data) {
-                    images[attachment.id] = image
+            // Managed images return a short-lived ticket URL; if it expires mid-fetch, ask once more.
+            for attempt in 0..<2 {
+                do {
+                    let result = try await gateway.request(
+                        "artifacts.download",
+                        ["sessionKey": .string(sessionKey), "artifactId": .string(artifactId)],
+                        timeout: 30)
+                    if let base64 = result["data"]?.string, let data = Data(base64Encoded: base64),
+                       let image = NSImage(data: data) {
+                        images[attachment.id] = image
+                        return
+                    }
+                    guard let path = result["url"]?.text, let url = gateway.httpURL(forPath: path) else {
+                        Log.error("artifacts.download returned no bytes or URL for \(artifactId)")
+                        return
+                    }
+                    if let image = try await Self.fetchImage(url) {
+                        images[attachment.id] = image
+                        return
+                    }
+                } catch {
+                    Log.error("Image load failed (attempt \(attempt + 1)): \(error.localizedDescription)")
                 }
-            } catch {
-                Log.error("artifacts.download failed: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Downloads a gateway media URL. The ticket in the URL is scoped to this one image.
+    nonisolated static func fetchImage(_ url: URL) async throws -> NSImage? {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 45
+        request.setValue("image/*", forHTTPHeaderField: "Accept")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else { return nil }
+        guard http.statusCode == 200 else {
+            throw GatewayError(code: "HTTP_\(http.statusCode)", message: "Image download returned HTTP \(http.statusCode)")
+        }
+        // OpenClaw's client guidance caps source images at 12 MiB.
+        guard data.count <= 12 * 1024 * 1024 else {
+            throw GatewayError(code: "TOO_LARGE", message: "Image is larger than 12 MB")
+        }
+        return NSImage(data: data)
+    }
+
+    /// Live terminal events can omit attachments (the image is committed with the transcript),
+    /// so pull them from the latest history rows and attach them to the matching reply.
+    func reconcileAttachments() {
+        Task {
+            try? await Task.sleep(for: .milliseconds(600))
+            guard let result = try? await gateway.request(
+                "chat.history", ["sessionKey": .string(sessionKey), "limit": 8], timeout: 20)
+            else { return }
+            for message in result["messages"]?.array ?? [] where message["role"]?.string == "assistant" {
+                let found = MessageText.images(message)
+                guard !found.isEmpty else { continue }
+                let runId = message["__openclaw"]?["runId"]?.string
+                let text = MessageText.extract(message)?.trimmed
+                let index = items.lastIndex { item in
+                    guard item.role == .assistant else { return false }
+                    if let runId, item.runId == runId { return true }
+                    return text != nil && item.text.trimmed == text
+                }
+                if let index {
+                    items[index].images = Self.uniqueImages(items[index].images + found)
+                } else if runId != nil {
+                    // An image-only completion we never saw live (e.g. after reconnecting).
+                    items.append(ChatItem(id: message["__openclaw"]?["id"]?.string ?? UUID().uuidString,
+                                          role: .assistant, text: text ?? "", runId: runId, images: found))
+                }
             }
         }
     }

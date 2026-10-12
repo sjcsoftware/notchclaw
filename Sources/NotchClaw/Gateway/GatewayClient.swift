@@ -157,6 +157,22 @@ final class GatewayClient {
 
     var gatewayKey: String { url?.absoluteString ?? "" }
 
+    /// Resolves a gateway-relative path (e.g. a media ticket URL) against the gateway's HTTP(S) origin.
+    func httpURL(forPath path: String) -> URL? {
+        url.flatMap { Self.httpURL(gateway: $0, path: path) }
+    }
+
+    nonisolated static func httpURL(gateway: URL, path: String) -> URL? {
+        if let absolute = URL(string: path), absolute.scheme == "https" || absolute.scheme == "http" { return absolute }
+        guard var components = URLComponents(url: gateway, resolvingAgainstBaseURL: false) else { return nil }
+        components.scheme = components.scheme == "wss" ? "https" : "http"
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        guard let origin = components.url else { return nil }
+        return URL(string: path, relativeTo: origin)?.absoluteURL
+    }
+
     // MARK: Connection lifecycle
 
     private func connectNow() {

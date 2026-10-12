@@ -131,6 +131,7 @@ private struct MessageRow: View {
                 }
                 if !item.images.isEmpty {
                     AgentImagesView(attachments: item.images, session: session)
+                        .padding(.top, item.text.isEmpty ? 0 : 6)
                 }
                 if !item.isStreaming && !item.text.isEmpty {
                     HStack(spacing: 10) {
