@@ -62,6 +62,14 @@ wss.on('connection', (ws) => {
         setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: '## Hi', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi' }] } }), 600);
         setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: ' there\n\n- one\n- two' }), 900);
         setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'final', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi there\n\n- one\n- two' }, { type: 'image', artifactId: 'art_1', mimeType: 'image/png', width: 1, height: 1 }] } }), 1200);
+        if (process.env.MOCK_REPLAY) {
+          // Things a real gateway can deliver after a reply: a repeated terminal event,
+          // the same reply committed under another run id, and a silent run.
+          const finalMsg = { role: 'assistant', content: [{ type: 'text', text: '## Hi there\n\n- one\n- two' }] };
+          setTimeout(() => event('chat', { runId, sessionKey: sk, seq: 90, state: 'final', message: finalMsg }), 3500);
+          setTimeout(() => event('chat', { runId: runId + '-mirror', sessionKey: sk, seq: 0, state: 'final', message: finalMsg }), 4000);
+          setTimeout(() => event('chat', { runId: 'heartbeat-1', sessionKey: sk, seq: 0, state: 'final', message: { role: 'assistant', content: [] } }), 4500);
+        }
         return;
       }
       case 'artifacts.download': return res(f.id, true, { artifact: { id: f.params.artifactId, type: 'image', title: 'img', mimeType: 'image/png', download: { mode: 'bytes' } }, encoding: 'base64', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' });
