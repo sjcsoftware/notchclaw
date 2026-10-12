@@ -40,7 +40,11 @@ private struct BlockView: View {
         case .paragraph(let text):
             InlineText(text, size: baseSize)
         case .code(let language, let code):
-            CodeBlockView(language: language, code: code, size: baseSize - 1.5)
+            if language?.lowercased() == "chart" {
+                ChartBlockView(source: code, size: baseSize)
+            } else {
+                CodeBlockView(language: language, code: code, size: baseSize - 1.5)
+            }
         case .quote(let inner):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5)
@@ -170,7 +174,7 @@ struct CodeBlockView: View {
             .padding(.vertical, 6)
             .background(.white.opacity(0.04))
 
-            ScrollView(.horizontal, showsIndicators: false) {
+            HorizontalScroll {
                 Text(code)
                     .font(.system(size: size, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.88))
@@ -191,7 +195,7 @@ private struct TableBlockView: View {
     let size: CGFloat
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        HorizontalScroll {
             Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
                 GridRow {
                     ForEach(Array(header.enumerated()), id: \.offset) { i, cell in
@@ -229,4 +233,30 @@ private struct TableBlockView: View {
 
 extension Array {
     subscript(safe index: Int) -> Element? { indices.contains(index) ? self[index] : nil }
+}
+
+private struct NotchSnapshotKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// True while rendering static screenshots, where scroll views can't be captured.
+    var notchSnapshot: Bool {
+        get { self[NotchSnapshotKey.self] }
+        set { self[NotchSnapshotKey.self] = newValue }
+    }
+}
+
+/// A horizontal scroller that lays content out flat when rendering screenshots.
+struct HorizontalScroll<Content: View>: View {
+    @ViewBuilder let content: Content
+    @Environment(\.notchSnapshot) private var snapshot
+
+    var body: some View {
+        if snapshot {
+            content.frame(maxWidth: .infinity, alignment: .leading).clipped()
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) { content }
+        }
+    }
 }

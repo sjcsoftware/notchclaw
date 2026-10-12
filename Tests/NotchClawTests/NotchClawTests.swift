@@ -131,3 +131,42 @@ struct AgentSessionTests {
         #expect(MessageText.stripInstruction(AgentSession.markdownInstruction + "\n\nhi there") == "hi there")
     }
 }
+
+struct RichContentTests {
+    @Test func testChartSpecParsesSeriesAndNumbers() throws {
+        let spec = try #require(ChartSpec.parse("""
+        {"type":"line","title":"Latency","x":"Day","y":"ms","data":[
+          {"x":"Mon","y":412,"series":"p95"},{"x":"Tue","y":"398","series":"p95"},{"x":"Mon","y":180,"series":"p50"}]}
+        """))
+        #expect(spec.kind == .line)
+        #expect(spec.title == "Latency")
+        #expect(spec.points.count == 3)
+        #expect(spec.points[1].y == 398)
+        #expect(spec.hasSeries)
+        #expect(!spec.numericX)
+    }
+
+    @Test func testChartSpecAcceptsAliasesAndRejectsGarbage() {
+        let spec = ChartSpec.parse(#"{"kind":"pie","points":[{"label":"A","value":2},{"label":"B","value":3}]}"#)
+        #expect(spec?.kind == .pie)
+        #expect(spec?.points.map(\.x) == ["A", "B"])
+        #expect(ChartSpec.parse("{\"type\":\"bar\",\"data\":[") == nil)
+        #expect(ChartSpec.parse("not json") == nil)
+    }
+
+    @Test func testImageBlocksFromArtifactsAndInlineData() {
+        let message: JSON = ["role": "assistant", "content": [
+            ["type": "text", "text": "Here you go"],
+            ["type": "image", "artifactId": "art_1", "mimeType": "image/png", "alt": "A robot", "width": 1024, "height": 768],
+            ["type": "image", "source": ["type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="]],
+            ["type": "image"],
+        ]]
+        let images = MessageText.images(message)
+        #expect(images.count == 2)
+        #expect(images[0].artifactId == "art_1")
+        #expect(images[0].alt == "A robot")
+        #expect(images[0].aspectRatio == 1024.0 / 768.0)
+        #expect(images[1].inlineBase64 == "iVBORw0KGgo=")
+        #expect(MessageText.extract(message) == "Here you go")
+    }
+}

@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Observation
 
@@ -6,19 +7,25 @@ import Observation
 @Observable
 final class AgentSession {
     nonisolated static let markdownInstruction =
-        "<notchclaw-format>Reply in GitHub-flavored Markdown. Structure answers with short headings, "
-        + "bullet or numbered lists, tables for comparisons, **bold** for key terms, and fenced code blocks "
-        + "with a language tag for any code or commands. Keep it skimmable.</notchclaw-format>"
+        "<notchclaw-format>Reply in GitHub-flavored Markdown: short headings, lists, tables for comparisons, "
+        + "**bold** key terms, and fenced code blocks with a language tag. When numbers are easier to grasp visually, "
+        + "add a chart as a fenced ```chart block containing JSON like "
+        + "{\"type\":\"bar|line|area|point|pie\",\"title\":\"…\",\"x\":\"axis label\",\"y\":\"axis label\","
+        + "\"data\":[{\"x\":\"Mon\",\"y\":3,\"series\":\"optional\"}]}. When a picture is requested or would "
+        + "clearly help, use your image generation tool. Keep it skimmable.</notchclaw-format>"
 
     internal(set) var items: [ChatItem] = []
-    private(set) var activity: AgentActivity = .idle
-    private(set) var attention: AttentionReason?
+    internal(set) var activity: AgentActivity = .idle
+    internal(set) var attention: AttentionReason?
     private(set) var approvals: [PendingApproval] = []
     internal(set) var usage: UsageInfo?
     private(set) var models: [ModelOption] = []
     internal(set) var sessionSettings = SessionSettings()
     private(set) var toast: String?
     private(set) var historyLoaded = false
+    /// Decoded agent images keyed by attachment id.
+    private(set) var images: [String: NSImage] = [:]
+    @ObservationIgnored private var imageLoads: Set<String> = []
 
     @ObservationIgnored private let gateway: GatewayClient
     @ObservationIgnored private let settings: AppSettings
@@ -88,10 +95,12 @@ final class AgentSession {
         for (index, message) in (result["messages"]?.array ?? []).enumerated() {
             let role = message["role"]?.string
             guard role == "user" || role == "assistant" else { continue }
-            guard var text = MessageText.extract(message), !text.isEmpty else { continue }
+            var text = MessageText.extract(message) ?? ""
+            let attachments = role == "assistant" ? MessageText.images(message) : []
+            guard !text.isEmpty || !attachments.isEmpty else { continue }
             if role == "user" { text = MessageText.stripInstruction(text) }
             let id = message["id"]?.string ?? message["messageId"]?.string ?? "h\(index)"
-            var item = ChatItem(id: id, role: role == "user" ? .user : .assistant, text: text)
+            var item = ChatItem(id: id, role: role == "user" ? .user : .assistant, text: text, images: attachments)
             if let ts = message["timestamp"]?.double ?? message["ts"]?.double {
                 item.date = Date(timeIntervalSince1970: ts > 1e12 ? ts / 1000 : ts)
             }
@@ -356,8 +365,10 @@ final class AgentSession {
             if !wasStreaming { onAssistantOutput?() }
         case "final":
             let finalText = p["message"].flatMap { $0["openclawDisplayContent"].flatMap(MessageText.extract) ?? MessageText.extract($0) }
+            let finalImages = p["message"].map { MessageText.images($0["openclawDisplayContent"] ?? .null) + MessageText.images($0) } ?? []
             upsertAssistant(runId: runId) { item in
                 if let finalText { item.text = finalText }
+                if !finalImages.isEmpty { item.images = Self.uniqueImages(finalImages) }
                 item.isStreaming = false
             }
             removeEmptyAssistant(runId: runId)
@@ -400,7 +411,39 @@ final class AgentSession {
     }
 
     private func removeEmptyAssistant(runId: String) {
-        items.removeAll { $0.role == .assistant && $0.runId == runId && $0.text.trimmed.isEmpty }
+        items.removeAll { $0.role == .assistant && $0.runId == runId && $0.text.trimmed.isEmpty && $0.images.isEmpty }
+    }
+
+    nonisolated static func uniqueImages(_ images: [ImageAttachment]) -> [ImageAttachment] {
+        var seen = Set<String>()
+        return images.filter { seen.insert($0.id).inserted }
+    }
+
+    // MARK: Images
+
+    /// Starts loading an attachment's pixels if needed; views observe `images`.
+    func loadImage(_ attachment: ImageAttachment) {
+        guard images[attachment.id] == nil, !imageLoads.contains(attachment.id) else { return }
+        if let inline = attachment.inlineBase64, let data = Data(base64Encoded: inline), let image = NSImage(data: data) {
+            images[attachment.id] = image
+            return
+        }
+        guard let artifactId = attachment.artifactId, gateway.state.isConnected else { return }
+        imageLoads.insert(attachment.id)
+        Task {
+            defer { imageLoads.remove(attachment.id) }
+            do {
+                let result = try await gateway.request(
+                    "artifacts.download",
+                    ["sessionKey": .string(sessionKey), "artifactId": .string(artifactId)],
+                    timeout: 30)
+                if let base64 = result["data"]?.string, let data = Data(base64Encoded: base64), let image = NSImage(data: data) {
+                    images[attachment.id] = image
+                }
+            } catch {
+                Log.error("artifacts.download failed: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func handleApprovalRequested(_ p: JSON) {
@@ -483,6 +526,30 @@ enum MessageText {
             return extract(["content": .array(blocks)])
         }
         return message["text"]?.string
+    }
+
+    /// Image content blocks (`type: "image"`) with an artifact id or inline base64 data.
+    static func images(_ message: JSON) -> [ImageAttachment] {
+        let blocks = message["content"]?.array ?? message.array ?? []
+        return blocks.compactMap { block in
+            guard block["type"]?.string == "image" || block["type"]?.string == "output_image" else { return nil }
+            let artifactId = block["artifactId"]?.text
+            let inline = block["data"]?.text ?? block["source"]?["data"]?.text ?? block["image_url"]?.text.flatMap(dataURLPayload)
+            guard artifactId != nil || inline != nil else { return nil }
+            return ImageAttachment(
+                id: artifactId ?? String(inline!.suffix(48)),
+                artifactId: artifactId,
+                inlineBase64: inline,
+                mimeType: block["mimeType"]?.text ?? block["source"]?["media_type"]?.text,
+                alt: block["alt"]?.text ?? block["title"]?.text,
+                width: block["width"]?.double,
+                height: block["height"]?.double)
+        }
+    }
+
+    private static func dataURLPayload(_ url: String) -> String? {
+        guard url.hasPrefix("data:"), let comma = url.firstIndex(of: ",") else { return nil }
+        return String(url[url.index(after: comma)...])
     }
 
     static func stripInstruction(_ text: String) -> String {

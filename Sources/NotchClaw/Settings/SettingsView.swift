@@ -203,9 +203,9 @@ private struct AgentSettings: View {
             }
 
             Section("Replies") {
-                Toggle("Ask the agent to answer in Markdown", isOn: Binding(
+                Toggle("Ask for rich replies (Markdown, charts, images)", isOn: Binding(
                     get: { app.settings.injectMarkdownInstruction }, set: { app.settings.injectMarkdownInstruction = $0 }))
-                Text("Adds a short formatting instruction to each message sent from NotchClaw so replies render as rich text. Slash commands are sent untouched.")
+                Text("Adds a short instruction to each message sent from NotchClaw so replies use Markdown, ```chart blocks for data, and the agent's image tool when a picture helps. Slash commands are sent untouched.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
