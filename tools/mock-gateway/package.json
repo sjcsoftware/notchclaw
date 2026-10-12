@@ -1,0 +1,13 @@
+{
+  "name": "notchclaw-mock-gateway",
+  "private": true,
+  "description": "Schema-validating fake OpenClaw gateway for developing NotchClaw without a real agent.",
+  "type": "module",
+  "scripts": { "start": "node server.mjs" },
+  "dependencies": {
+    "@openclaw/gateway-protocol": "2026.8.1",
+    "ajv": "8.17.1",
+    "ajv-formats": "3.0.1",
+    "ws": "8.18.0"
+  }
+}

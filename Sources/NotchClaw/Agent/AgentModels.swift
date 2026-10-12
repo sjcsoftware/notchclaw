@@ -9,6 +9,23 @@ struct ChatItem: Identifiable, Equatable {
     var date: Date = Date()
     var runId: String?
     var isStreaming = false
+    var images: [ImageAttachment] = []
+}
+
+/// An image the agent produced (e.g. via `image_generate`), referenced by artifact id or inlined.
+struct ImageAttachment: Identifiable, Equatable, Hashable {
+    var id: String
+    var artifactId: String?
+    var inlineBase64: String?
+    var mimeType: String?
+    var alt: String?
+    var width: Double?
+    var height: Double?
+
+    var aspectRatio: Double? {
+        guard let width, let height, width > 0, height > 0 else { return nil }
+        return width / height
+    }
 }
 
 enum AgentActivity: Equatable {

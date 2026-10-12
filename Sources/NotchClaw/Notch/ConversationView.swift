@@ -5,17 +5,29 @@ struct ConversationView: View {
     let app: AppModel
     let maxHeight: CGFloat
     @State private var contentHeight: CGFloat = 0
+    @Environment(\.notchSnapshot) private var snapshot
 
     var body: some View {
+        if snapshot {
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(app.session.items) { MessageRow(item: $0, session: app.session) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            scrolling
+        }
+    }
+
+    private var scrolling: some View {
         let session = app.session
-        ScrollViewReader { proxy in
+        return ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 14) {
                     if session.items.isEmpty {
                         EmptyConversation(app: app)
                     }
                     ForEach(session.items) { item in
-                        MessageRow(item: item, emoji: app.settings.resolvedEmoji)
+                        MessageRow(item: item, session: session)
                             .id(item.id)
                     }
                     if showsPendingThinking {
@@ -88,7 +100,7 @@ private struct EmptyConversation: View {
 
 private struct MessageRow: View {
     let item: ChatItem
-    let emoji: String
+    let session: AgentSession
     @State private var hovering = false
     @State private var copied = false
 
@@ -112,10 +124,13 @@ private struct MessageRow: View {
             .transition(.move(edge: .bottom).combined(with: .opacity))
         case .assistant:
             VStack(alignment: .leading, spacing: 4) {
-                if item.text.isEmpty {
+                if item.text.isEmpty && item.images.isEmpty {
                     ThinkingRow(phase: nil)
-                } else {
+                } else if !item.text.isEmpty {
                     MarkdownView(item.text)
+                }
+                if !item.images.isEmpty {
+                    AgentImagesView(attachments: item.images, session: session)
                 }
                 if !item.isStreaming && !item.text.isEmpty {
                     HStack(spacing: 10) {
@@ -211,10 +226,19 @@ struct ContextRing: View {
 struct Composer: View {
     let app: AppModel
     @FocusState private var focused: Bool
+    @Environment(\.notchSnapshot) private var snapshot
 
     var body: some View {
         let notch = app.notch
         HStack(alignment: .bottom, spacing: 8) {
+            if snapshot {
+                Text("Message \(app.settings.resolvedName)…")
+                    .font(.system(size: 13))
+                    .foregroundStyle(.white.opacity(0.35))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 8)
+                    .padding(.leading, 12)
+            } else {
             TextField(
                 "Message \(app.settings.resolvedName)…",
                 text: Binding(get: { notch.composerText }, set: { notch.composerText = $0 }),
@@ -228,6 +252,7 @@ struct Composer: View {
                 .padding(.vertical, 8)
                 .padding(.leading, 12)
                 .accessibilityLabel("Message")
+            }
 
             if app.session.activity.isBusy && app.session.activity != .compacting {
                 Button { app.session.abort() } label: { Image(systemName: "stop.fill") }
@@ -298,5 +323,104 @@ struct Composer: View {
         }
         app.notch.composerText = ""
         app.session.send(text)
+    }
+}
+
+// MARK: - Images
+
+/// Images the agent generated, loaded on demand through `artifacts.download`.
+struct AgentImagesView: View {
+    let attachments: [ImageAttachment]
+    let session: AgentSession
+
+    var body: some View {
+        let columns = attachments.count == 1
+            ? [GridItem(.flexible())]
+            : [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+        LazyVGrid(columns: columns, alignment: .leading, spacing: 8) {
+            ForEach(attachments) { attachment in
+                AgentImageTile(attachment: attachment, session: session, single: attachments.count == 1)
+            }
+        }
+        .frame(maxWidth: attachments.count == 1 ? 400 : .infinity, alignment: .leading)
+    }
+}
+
+private struct AgentImageTile: View {
+    let attachment: ImageAttachment
+    let session: AgentSession
+    let single: Bool
+    @State private var hovering = false
+
+    var body: some View {
+        let image = session.images[attachment.id]
+        ZStack {
+            if let image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: single ? .fit : .fill)
+                    .transition(.opacity)
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(0.06))
+                    .overlay {
+                        VStack(spacing: 6) {
+                            Image(systemName: "photo").font(.system(size: 18))
+                            Text(attachment.artifactId == nil ? "Image unavailable" : "Loading image…")
+                                .font(.system(size: 10.5))
+                        }
+                        .foregroundStyle(.white.opacity(0.4))
+                    }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: single ? nil : 150)
+        .aspectRatio(single ? (image.map { $0.size.width / max($0.size.height, 1) } ?? attachment.aspectRatio ?? 1.5) : nil,
+                     contentMode: .fit)
+        .frame(maxHeight: single ? 300 : 150)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(.white.opacity(hovering ? 0.25 : 0.08)))
+        .scaleEffect(hovering ? 1.01 : 1)
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .animation(.easeOut(duration: 0.25), value: image != nil)
+        .onHover { hovering = $0 }
+        .onAppear { session.loadImage(attachment) }
+        .onTapGesture { if let image { ImageExport.open(image, name: attachment.id) } }
+        .contextMenu {
+            if let image {
+                Button("Open in Preview") { ImageExport.open(image, name: attachment.id) }
+                Button("Copy Image") {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.writeObjects([image])
+                }
+                Button("Save to Downloads") { ImageExport.saveToDownloads(image, name: attachment.id) }
+            }
+        }
+        .help(attachment.alt ?? "Generated image — click to open")
+        .accessibilityLabel(attachment.alt ?? "Generated image")
+    }
+}
+
+enum ImageExport {
+    static func pngData(_ image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
+    }
+
+    static func open(_ image: NSImage, name: String) {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("notchclaw-\(safe(name)).png")
+        guard let data = pngData(image), (try? data.write(to: url)) != nil else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    static func saveToDownloads(_ image: NSImage, name: String) {
+        guard let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first,
+              let data = pngData(image) else { return }
+        let url = downloads.appendingPathComponent("NotchClaw \(safe(name)).png")
+        if (try? data.write(to: url)) != nil { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    }
+
+    private static func safe(_ name: String) -> String {
+        String(name.filter { $0.isLetter || $0.isNumber || $0 == "-" }.prefix(40))
     }
 }
