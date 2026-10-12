@@ -29,12 +29,10 @@
 - [Set up](#set-up)
 - [Use case](#use-case)
 - [Charts and images in replies](#charts-and-images-in-replies)
-- [How it works](#how-it-works)
-- [Privacy and security](#privacy-and-security)
-- [Development](#development)
-- [Troubleshooting](#troubleshooting)
 - [Acknowledgments](#acknowledgments)
 - [License](#license)
+
+> How it works, privacy and security, development, and troubleshooting live in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Features
 
@@ -179,61 +177,6 @@ Supported types are `bar`, `line`, `area`, `point`, and `pie`. Add `series` for 
 Generated images appear inline in the chat. Click one to open it in Preview, or right-click to copy or save it.
 
 > **Where do standing instructions go?** In OpenClaw, `MEMORY.md` is for durable facts and decisions, not behaviour. If you want charts and images on every channel (Telegram, WhatsApp, and so on), add a line to your workspace's **`AGENTS.md`** instead, for example: *"When data is easier to grasp visually, include a chart; when a picture would help, use image_generate."* Inside NotchClaw you don't need this, because the per-message note already covers it.
-
-## How it works
-
-NotchClaw is an operator client for the [OpenClaw Gateway WebSocket protocol](https://github.com/openclaw/openclaw/tree/main/docs/gateway/protocol) (v4).
-
-```
-Sources/NotchClaw/
-├── App/        main, AppDelegate (menus, status item, settings window), AppModel (wiring)
-├── Gateway/    GatewayClient (handshake, RPC, events, reconnect), DeviceIdentity (Ed25519), JSON
-├── Agent/      AgentSession (chat stream, history, approvals, model/effort/compact, usage, images)
-├── Notch/      NotchController (panel, hover, click-through), Home/Chat views, glow & animations
-├── Markdown/   Block parser, renderer, Swift Charts blocks
-├── Voice/      Carbon hold-to-talk hotkey, speech capture, voice-command parser
-└── Settings/   Preferences and the Settings window
-```
-
-- **Handshake.** NotchClaw waits for `connect.challenge` and signs the challenge-bound payload with a per-install Ed25519 key. It then sends `connect` as an `operator` with `operator.read`, `operator.write`, and `operator.approvals`, and stores the device token the gateway issues.
-- **Streaming.** It subscribes with `sessions.messages.subscribe` and renders `chat` events (`delta`, `final`, `error`), restoring history with `chat.history`.
-- **Controls** call `sessions.patch` (model, `thinkingLevel`), `sessions.compact`, `sessions.reset`, `chat.abort`, `exec.approval.resolve`, `usage.status`, and `artifacts.download`.
-- **Liveness.** A tick and ping watchdog, `NWPathMonitor`, and wake notifications trigger an immediate reconnect, with exponential backoff (up to 10 s) otherwise.
-- **The notch** is a borderless, non-activating `NSPanel` above the menu bar. It's click-through everywhere except the visible notch, so it never blocks the apps underneath.
-
-## Privacy and security
-
-- The gateway token and device key are stored in `~/Library/Application Support/NotchClaw/credentials.json` with `0600` permissions.
-- Speech is transcribed by **Apple's Speech framework**, on-device when the model is available. Audio is only captured while you hold the shortcut.
-- NotchClaw talks only to the gateway you configure. It has no analytics or telemetry.
-
-## Development
-
-```bash
-scripts/test.sh          # unit tests (Swift Testing; works with just the Command Line Tools)
-scripts/build.sh         # release .app + DMG in dist/ (add --desktop to copy the DMG to ~/Desktop)
-scripts/screenshots.sh   # regenerate README screenshots and the icon preview
-```
-
-**Develop without a real agent.** `tools/mock-gateway` is a fake gateway that checks every request against OpenClaw's published protocol schema and streams a canned reply with a chart and an image:
-
-```bash
-cd tools/mock-gateway && npm install && PORT=18799 npm start
-# then set the gateway URL in NotchClaw to ws://127.0.0.1:18799
-```
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. The original product brief lives in [docs/IDEA.md](docs/IDEA.md).
-
-## Troubleshooting
-
-| Symptom | Fix |
-| --- | --- |
-| "Approve this Mac on your gateway" | Run `openclaw devices approve <id>` on the gateway host |
-| "Gateway token doesn't match" | Re-enter `gateway.auth.token` in Settings › Gateway |
-| Holding <kbd>⌥ Space</kbd> does nothing | Another app may own that shortcut (Settings › Voice warns about this); pick a different one |
-| "Turn on Dictation…" in the bubble | Enable **System Settings › Keyboard › Dictation**, or allow Speech Recognition |
-| No usage meter | The gateway's model isn't using a Codex/ChatGPT login, or **Show Codex usage** is off |
-| macOS asks for mic access again after an update | Expected with ad-hoc signed builds; each build is a new signature |
 
 ## Acknowledgments
 
