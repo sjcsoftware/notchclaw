@@ -48,9 +48,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             window.setFrameAutosaveName("NotchClawSettings")
             window.center()
             settingsWindow = window
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.model.settingsVisible = false }
+            }
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didMiniaturizeNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.model.settingsVisible = false }
+            }
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.didDeminiaturizeNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.model.settingsVisible = true }
+            }
         }
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
+        model.settingsVisible = true
     }
 
     @objc private func toggleNotch() { notchController?.toggle() }

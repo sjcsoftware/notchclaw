@@ -63,6 +63,9 @@ final class AppSettings {
     var autoSendVoice: Bool { didSet { defaults.set(autoSendVoice, forKey: "autoSendVoice") } }
     var showMenuBarIcon: Bool { didSet { defaults.set(showMenuBarIcon, forKey: "showMenuBarIcon") } }
     var hapticFeedback: Bool { didSet { defaults.set(hapticFeedback, forKey: "hapticFeedback") } }
+    /// Fine-tuning for the minimized notch, in points, relative to the detected hardware notch.
+    var notchWidthAdjust: Double { didSet { defaults.set(notchWidthAdjust, forKey: "notchWidthAdjust") } }
+    var notchHeightAdjust: Double { didSet { defaults.set(notchHeightAdjust, forKey: "notchHeightAdjust") } }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -84,7 +87,12 @@ final class AppSettings {
         autoSendVoice = defaults.object(forKey: "autoSendVoice") as? Bool ?? true
         showMenuBarIcon = defaults.object(forKey: "showMenuBarIcon") as? Bool ?? true
         hapticFeedback = defaults.object(forKey: "hapticFeedback") as? Bool ?? true
+        notchWidthAdjust = defaults.object(forKey: "notchWidthAdjust") as? Double ?? 0
+        notchHeightAdjust = defaults.object(forKey: "notchHeightAdjust") as? Double ?? 0
     }
+
+    static let notchWidthAdjustRange: ClosedRange<Double> = -80...160
+    static let notchHeightAdjustRange: ClosedRange<Double> = -16...24
 
     var resolvedSessionKey: String { sessionKey.nonEmpty ?? "main" }
     var resolvedEmoji: String { agentEmoji.nonEmpty ?? "🦞" }

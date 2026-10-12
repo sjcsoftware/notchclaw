@@ -7,15 +7,19 @@ struct SettingsView: View {
     let app: AppModel
 
     var body: some View {
-        TabView {
+        TabView(selection: Binding(get: { app.settingsTab }, set: { app.settingsTab = $0 })) {
             GatewaySettings(app: app)
                 .tabItem { Label("Gateway", systemImage: "network") }
+                .tag(AppModel.SettingsTab.gateway)
             AgentSettings(app: app)
                 .tabItem { Label("Agent", systemImage: "face.smiling") }
+                .tag(AppModel.SettingsTab.agent)
             NotchSettings(app: app)
                 .tabItem { Label("Notch", systemImage: "rectangle.topthird.inset.filled") }
+                .tag(AppModel.SettingsTab.notch)
             VoiceSettings(app: app)
                 .tabItem { Label("Voice", systemImage: "mic") }
+                .tag(AppModel.SettingsTab.voice)
         }
         .frame(width: 520)
         .frame(minHeight: 430)
@@ -251,6 +255,8 @@ private struct NotchSettings: View {
                     .foregroundStyle(.secondary)
             }
 
+            NotchSizeTuner(app: app)
+
             Section("Expanded size limit") {
                 LabeledContent("Max height") {
                     HStack {
@@ -406,5 +412,64 @@ private struct ShortcutRecorder: View {
         monitor = nil
         recording = false
         app.isRecordingShortcut = false
+    }
+}
+
+/// Live fine-tuning of the minimized notch so it lines up with the hardware cutout.
+private struct NotchSizeTuner: View {
+    let app: AppModel
+
+    var body: some View {
+        let geometry = app.notch.geometry
+        let size = app.notch.closedSize
+        Section {
+            LabeledContent("Detected notch") {
+                Text("\(Int(geometry.notchWidth)) × \(Int(geometry.notchHeight)) pt")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            adjustRow(
+                "Width", value: Binding(get: { app.settings.notchWidthAdjust }, set: { app.settings.notchWidthAdjust = $0 }),
+                range: AppSettings.notchWidthAdjustRange, result: size.width)
+            adjustRow(
+                "Height", value: Binding(get: { app.settings.notchHeightAdjust }, set: { app.settings.notchHeightAdjust = $0 }),
+                range: AppSettings.notchHeightAdjustRange, result: size.height)
+            HStack {
+                Text("The minimized notch is outlined in blue while this page is open.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button("Reset") {
+                    app.settings.notchWidthAdjust = 0
+                    app.settings.notchHeightAdjust = 0
+                }
+                .disabled(app.settings.notchWidthAdjust == 0 && app.settings.notchHeightAdjust == 0)
+            }
+        } header: {
+            Text("Minimized notch size")
+        } footer: {
+            Text("Nudge the size until the black box sits exactly over your Mac's notch. Changes apply instantly.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func adjustRow(_ title: String, value: Binding<Double>, range: ClosedRange<Double>, result: CGFloat) -> some View {
+        LabeledContent(title) {
+            HStack(spacing: 10) {
+                Slider(value: value, in: range, step: 1)
+                    .frame(minWidth: 140)
+                    .accessibilityLabel("\(title) adjustment")
+                Text(value.wrappedValue == 0 ? "±0" : String(format: "%+.0f", value.wrappedValue))
+                    .monospacedDigit()
+                    .frame(width: 34, alignment: .trailing)
+                Stepper(title, value: value, in: range, step: 1)
+                    .labelsHidden()
+                    .accessibilityLabel("\(title) adjustment")
+                Text("\(Int(result)) pt")
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .frame(width: 52, alignment: .trailing)
+            }
+        }
     }
 }

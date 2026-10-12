@@ -15,6 +15,11 @@ enum SnapshotRenderer {
         scene(url, "minimized-glow", height: 120) { app in
             app.session.attention = .reply
         }
+        // Fine-tuning the minimized size in Settings (outlined).
+        scene(url, "minimized-tuning", height: 120) { app in
+            app.notch.isTuningSize = true
+            app.notch.sizeAdjust = CGSize(width: 24, height: 4)
+        }
         // Default (home) screen.
         scene(url, "home", height: 250) { app in
             app.notch.expand(page: .home)

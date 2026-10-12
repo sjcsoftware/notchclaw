@@ -44,6 +44,16 @@ struct NotchRootView: View {
                         .transition(.opacity.animation(.easeInOut(duration: 0.4)))
                 }
             }
+            .overlay {
+                // While fine-tuning in Settings, outline the minimized notch so it can be lined up
+                // with the hardware cutout.
+                if notch.isTuningSize && !expanded {
+                    shape.stroke(Color(red: 0.35, green: 0.75, blue: 1), lineWidth: 1.5)
+                        .shadow(color: Color(red: 0.35, green: 0.75, blue: 1).opacity(0.8), radius: 4)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
             .shadow(color: .black.opacity(expanded ? 0.55 : 0), radius: 22, y: 8)
             .contentShape(shape)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { notch.contentFrame = $0 }
@@ -57,6 +67,8 @@ struct NotchRootView: View {
         .animation(reduceMotion ? .easeInOut(duration: 0.15) : .spring(response: 0.42, dampingFraction: 0.82), value: expanded)
         .animation(.spring(response: 0.45, dampingFraction: 0.85), value: notch.page)
         .animation(.easeInOut(duration: 0.35), value: glowing)
+        .animation(.spring(response: 0.25, dampingFraction: 0.9), value: notch.sizeAdjust)
+        .animation(.easeInOut(duration: 0.2), value: notch.isTuningSize)
         .environment(\.colorScheme, .dark)
     }
 }

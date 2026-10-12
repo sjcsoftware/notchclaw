@@ -31,7 +31,6 @@ struct NotchGeometry: Equatable {
 }
 
 enum NotchLayout {
-    static let earWidth: CGFloat = 14
     static let homeWidth: CGFloat = 600
     static let headerTopPadding: CGFloat = 10
     static let baseExpandedWidth: CGFloat = 620
@@ -68,11 +67,19 @@ final class NotchViewModel {
     var isMenuOpen = false
     /// Asks the composer to take keyboard focus once it is on screen.
     var wantsComposerFocus = false
+    /// True while the size tuner in Settings is visible: outlines the minimized notch.
+    var isTuningSize = false
+    /// Width/height fine-tuning from Settings, applied to the minimized notch.
+    var sizeAdjust: CGSize = .zero
     /// Makes the overlay panel key so the composer can receive typing.
     @ObservationIgnored var requestKeyWindow: () -> Void = {}
 
+    /// The minimized notch frame. Its visible body matches the detected hardware notch (the
+    /// concave top "ears" extend past it on each side) plus the user's fine-tuning.
     var closedSize: CGSize {
-        CGSize(width: geometry.notchWidth + NotchLayout.earWidth * 2, height: geometry.notchHeight)
+        CGSize(
+            width: max(40, geometry.notchWidth + NotchLayout.closedCorners.top * 2 + sizeAdjust.width),
+            height: max(8, geometry.notchHeight + sizeAdjust.height))
     }
 
     func maxExpandedSize(settings: AppSettings) -> CGSize {

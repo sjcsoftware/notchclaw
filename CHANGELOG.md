@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.5.0
+- The minimized notch opens only when the pointer is actually inside it (edges included), not when it passes nearby.
+- New **Settings › Notch › Minimized notch size** tuner: adjust width and height with sliders or steppers and watch the notch resize live, outlined in blue, to match your Mac's hardware notch.
+- The minimized notch's visible body now defaults to the detected hardware notch size.
+
 ## 0.4.1
 - Fix: agent-generated images now display. Managed images arrive as short-lived media-ticket URLs, which NotchClaw now fetches from the gateway origin (renewing an expired ticket once); attachments missing from live events are recovered from the transcript.
 - Relicensed under GPL-3.0 (previously MIT).
