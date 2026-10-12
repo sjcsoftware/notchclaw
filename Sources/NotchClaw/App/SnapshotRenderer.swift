@@ -177,6 +177,26 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_GLOW_TEST"] != nil {
+            // Reply while minimized must glow; replays after the user has looked must not.
+            Task {
+                while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
+                try? await Task.sleep(for: .seconds(1))
+                model.session.send("hello")
+                try? await Task.sleep(for: .seconds(2))
+                print("AFTER-REPLY attention=\(String(describing: model.session.attention)) items=\(model.session.items.count)")
+                // The user opens the notch, reads the chat, and minimizes it again.
+                model.notch.expand(page: .chat)
+                model.session.clearAttention()
+                try? await Task.sleep(for: .milliseconds(300))
+                model.notch.collapse()
+                try? await Task.sleep(for: .seconds(3.5))
+                print("AFTER-REPLAYS attention=\(String(describing: model.session.attention)) items=\(model.session.items.count) assistants=\(model.session.items.filter { $0.role == .assistant }.map { $0.text.prefix(12) })")
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["NOTCHCLAW_SESSIONS_TEST"] != nil {
             // Exercises list → create → switch back against the mock gateway.
             Task {

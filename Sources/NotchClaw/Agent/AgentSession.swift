@@ -30,6 +30,10 @@ final class AgentSession {
     @ObservationIgnored private let gateway: GatewayClient
     @ObservationIgnored private let settings: AppSettings
     @ObservationIgnored private var activeRunId: String?
+    /// Runs whose terminal event was already handled (terminal events can be re-delivered).
+    @ObservationIgnored private var finalizedRuns: Set<String> = []
+    /// What the user last had on screen per run, to tell genuinely new replies from repeats.
+    @ObservationIgnored private var seenContent: [String: String] = [:]
     @ObservationIgnored private var usageTimer: Timer?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var usageRetries = 0
@@ -60,7 +64,33 @@ final class AgentSession {
     var sessionKey: String { settings.resolvedSessionKey }
     var latestAssistantText: String? { items.last(where: { $0.role == .assistant })?.text }
 
-    func clearAttention() { attention = nil }
+    /// Called when the user opens the notch: everything on screen now counts as seen.
+    func clearAttention() {
+        attention = nil
+        for item in items where item.role == .assistant {
+            if let runId = item.runId { seenContent[runId] = Self.fingerprint(item) }
+        }
+    }
+
+    private func markSeen(runId: String) {
+        guard let item = items.last(where: { $0.role == .assistant && $0.runId == runId }) else { return }
+        seenContent[runId] = Self.fingerprint(item)
+    }
+
+    /// True when the reply has text or images the user hasn't had on screen yet.
+    private func hasUnseenContent(runId: String) -> Bool {
+        guard let item = items.last(where: { $0.role == .assistant && $0.runId == runId }) else { return false }
+        return seenContent[runId] != Self.fingerprint(item)
+    }
+
+    private func rememberFinal(_ runId: String) {
+        finalizedRuns.insert(runId)
+        if finalizedRuns.count > 500 { finalizedRuns.removeAll(keepingCapacity: true); finalizedRuns.insert(runId) }
+    }
+
+    nonisolated static func fingerprint(_ item: ChatItem) -> String {
+        item.text.trimmed + "|" + item.images.map(\.id).joined(separator: ",")
+    }
 
     // MARK: Connection
 
@@ -466,17 +496,30 @@ final class AgentSession {
             let snapshotImages = p["message"].map(MessageText.images) ?? []
             let replace = p["replace"]?.bool == true
             upsertAssistant(runId: runId) { item in
+                // A supplied snapshot already includes deltaText; never append it twice.
                 if let snapshot { item.text = snapshot }
-                if !snapshotImages.isEmpty { item.images = Self.uniqueImages(item.images + snapshotImages) }
                 else if replace { item.text = delta }
                 else { item.text += delta }
+                if !snapshotImages.isEmpty { item.images = Self.uniqueImages(item.images + snapshotImages) }
             }
+            if isUserLooking() { markSeen(runId: runId) }
             let wasStreaming = activity == .streaming
             activity = .streaming
             if !wasStreaming { onAssistantOutput?() }
         case "final":
+            let alreadyFinal = finalizedRuns.contains(runId)
+            rememberFinal(runId)
+            let hadItem = items.contains { $0.role == .assistant && $0.runId == runId }
             let finalText = p["message"].flatMap { $0["openclawDisplayContent"].flatMap(MessageText.extract) ?? MessageText.extract($0) }
             let finalImages = p["message"].map { MessageText.images($0["openclawDisplayContent"] ?? .null) + MessageText.images($0) } ?? []
+            // A second commit of the latest reply under another run id (e.g. a mirrored
+            // transcript write) is not a new message: don't duplicate it or glow.
+            if !hadItem, finalImages.isEmpty, let finalText,
+               let latest = items.last(where: { $0.role == .assistant }), latest.text.trimmed == finalText.trimmed {
+                Log.info("Ignoring duplicate final for run \(runId)")
+                finishRun(runId)
+                return
+            }
             upsertAssistant(runId: runId) { item in
                 if let finalText { item.text = finalText }
                 if !finalImages.isEmpty { item.images = Self.uniqueImages(finalImages) }
@@ -484,8 +527,19 @@ final class AgentSession {
             }
             removeEmptyAssistant(runId: runId)
             finishRun(runId)
-            if items.last?.role == .assistant { onAssistantOutput?() }
-            raiseAttention(.reply)
+            let visible = items.contains { $0.role == .assistant && $0.runId == runId }
+            if visible, !alreadyFinal {
+                onAssistantOutput?()
+                if isUserLooking() {
+                    markSeen(runId: runId)
+                } else if hasUnseenContent(runId: runId) {
+                    raiseAttention(.reply, runId: runId)
+                } else {
+                    Log.info("Final for run \(runId) adds nothing unseen; no glow")
+                }
+            } else {
+                Log.info("No glow for run \(runId): \(alreadyFinal ? "repeat final" : "silent run")")
+            }
             reconcileAttachments()
             refreshUsage()
             refreshSessionSettings()
@@ -498,8 +552,10 @@ final class AgentSession {
             upsertAssistant(runId: runId) { $0.isStreaming = false }
             removeEmptyAssistant(runId: runId)
             finishRun(runId)
+            guard !finalizedRuns.contains(runId) else { return }
+            rememberFinal(runId)
             appendError(p["errorMessage"]?.text ?? "The agent hit an error.")
-            raiseAttention(.error)
+            raiseAttention(.error, runId: runId)
         default:
             break
         }
@@ -636,9 +692,10 @@ final class AgentSession {
         raiseAttention(.needsInput)
     }
 
-    private func raiseAttention(_ reason: AttentionReason) {
+    private func raiseAttention(_ reason: AttentionReason, runId: String? = nil) {
         guard settings.glowOnReply || reason == .needsInput else { return }
         if isUserLooking(), reason != .needsInput { return }
+        Log.info("Attention raised: \(reason) run=\(runId ?? "-")")
         attention = reason
         onAttention?(reason)
     }

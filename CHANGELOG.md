@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+- Fix: the minimized notch no longer glows when there's no new message. Repeated terminal events for a run, the same reply committed under a second run id, silent runs, and replies you already read now leave the notch dark (and no longer duplicate the reply in chat).
+- Fix: a streamed snapshot frame could repeat its last chunk of text.
+
 ## 0.6.0
 - **Session picker.** The home screen's session tile shows the current session; click it to start a **New session** (no admin needed), jump to a recent session, or reset the current one (admin).
 - The usage meter in the header now reads **OpenAI mark · percent · bar**.
