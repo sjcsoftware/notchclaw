@@ -7,114 +7,78 @@ struct HomeView: View {
 
     var body: some View {
         let notch = app.notch
-        VStack(spacing: 8) {
-            HStack(spacing: 0) {
-                AgentStatusLine(app: app)
-                Spacer(minLength: notch.geometry.notchWidth + 12)
-                UsageCluster(app: app)
-            }
-            .frame(height: notch.geometry.notchHeight)
+        let session = app.session
+        let replies = session.items.filter { $0.role == .assistant }.count
+
+        VStack(spacing: 14) {
+            NotchHeader(app: app)
+                .padding(.top, NotchLayout.headerTopPadding)
 
             ConnectionBanner(app: app)
-            ForEach(app.session.approvals) { approval in
+            ForEach(session.approvals) { approval in
                 ApprovalCard(approval: approval) { decision in
-                    app.session.resolveApproval(approval, decision: decision)
+                    session.resolveApproval(approval, decision: decision)
                 }
             }
 
-            HStack(alignment: .center, spacing: 18) {
-                VStack(alignment: .trailing, spacing: 7) {
-                    modelButton
-                    effortButton
-                    compactButton
+            HStack(alignment: .center, spacing: 22) {
+                VStack(spacing: 8) {
+                    HomeAction(icon: "cpu", tint: NotchPalette.siri[2], title: modelTitle, menu: true) {
+                        ModelMenus.showModels(app)
+                    }
+                    .help("Model")
+                    HomeAction(icon: "brain.head.profile", tint: NotchPalette.siri[1],
+                               title: session.sessionSettings.thinkingLevel?.capitalized ?? "Effort", menu: true) {
+                        ModelMenus.showEffort(app)
+                    }
+                    .help("Reasoning effort")
+                    HomeAction(icon: "rectangle.compress.vertical", tint: NotchPalette.siri[3], title: "Compact",
+                               trailing: session.sessionSettings.contextFraction.map { AnyView(ContextRing(fraction: $0)) }) {
+                        session.compact()
+                    }
+                    .disabled(session.activity.isBusy)
+                    .help(session.sessionSettings.contextFraction.map { "Compact context (\(Int($0 * 100))% used)" } ?? "Compact context")
                 }
-                .frame(maxWidth: .infinity, alignment: .trailing)
 
                 AgentStage(app: app)
 
-                VStack(alignment: .leading, spacing: 7) {
-                    HomeAction(icon: "bubble.left.and.text.bubble.right.fill", title: "Chat",
-                               badge: app.session.items.isEmpty ? nil : "\(app.session.items.filter { $0.role == .assistant }.count)",
-                               prominent: true) {
+                VStack(spacing: 8) {
+                    HomeAction(icon: "bubble.left.and.text.bubble.right.fill", tint: .white, title: "Chat",
+                               badge: replies > 0 ? "\(replies)" : nil, prominent: true) {
                         notch.showChat(focusComposer: true)
                     }
                     .help("Open the conversation")
-                    HomeAction(icon: "square.and.pencil", title: "New session") { app.session.newSession() }
-                        .help("Reset the session and start fresh")
-                    HomeAction(icon: "gearshape.fill", title: "Settings") { app.openSettings() }
-                        .help("NotchClaw settings (⌘,)")
+                    HomeAction(icon: "square.and.pencil", tint: NotchPalette.siri[4], title: "New session") {
+                        session.newSession()
+                    }
+                    .help("Reset the session and start fresh")
+                    HomeAction(icon: "gearshape.fill", tint: .white.opacity(0.75), title: "Settings") {
+                        app.openSettings()
+                    }
+                    .help("NotchClaw settings (⌘,)")
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.top, 2)
 
             SpeechBubble(app: app)
-                .frame(minHeight: 34)
+                .frame(minHeight: 30)
         }
-        .padding(.horizontal, NotchLayout.openCorners.top + 12)
-        .padding(.bottom, 12)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 16)
         .frame(width: NotchLayout.homeWidth)
-        .overlay(alignment: .bottom) { ToastView(message: app.session.toast) }
+        .overlay(alignment: .bottom) { ToastView(message: session.toast) }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: app.voice.phase)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: app.spokenText)
     }
 
-    // MARK: Controls
-
-    private var modelButton: some View {
-        let session = app.session
-        let current = session.sessionSettings.modelRef
-        return HomeAction(icon: "cpu", title: current.map(AgentSession.shortModelName) ?? "Model", menu: true) {
-            var entries: [PopupMenu.Entry] = [.item("Default model", checked: current == nil) { session.setModel(nil) }]
-            let byProvider = Dictionary(grouping: session.models, by: \.provider)
-            for provider in byProvider.keys.sorted() {
-                entries.append(.separator)
-                entries.append(.header(provider))
-                for model in byProvider[provider] ?? [] {
-                    entries.append(.item(model.name, checked: model.id == current) { session.setModel(model.id) })
-                }
-            }
-            if session.models.isEmpty {
-                entries.append(.item(app.gateway.state.isConnected ? "Loading models…" : "Connect to choose a model",
-                                     enabled: false) {})
-                session.loadModels()
-            }
-            PopupMenu.show(entries)
-        }
-        .help("Model")
-        .accessibilityLabel("Model: \(current ?? "default")")
-    }
-
-    private var effortButton: some View {
-        let session = app.session
-        let settings = session.sessionSettings
-        return HomeAction(icon: "brain.head.profile", title: settings.thinkingLevel?.capitalized ?? "Effort", menu: true) {
-            var entries: [PopupMenu.Entry] = [
-                .item("Default effort", checked: settings.thinkingLevel == nil) { session.setThinking(nil) },
-                .separator,
-            ]
-            for level in settings.thinkingOptions {
-                entries.append(.item(level.capitalized, checked: level == settings.thinkingLevel) { session.setThinking(level) })
-            }
-            PopupMenu.show(entries)
-        }
-        .help("Reasoning effort")
-        .accessibilityLabel("Reasoning effort: \(settings.thinkingLevel ?? "default")")
-    }
-
-    private var compactButton: some View {
-        let fraction = app.session.sessionSettings.contextFraction
-        return HomeAction(icon: "rectangle.compress.vertical", title: "Compact", trailing: fraction.map { AnyView(ContextRing(fraction: $0)) }) {
-            app.session.compact()
-        }
-        .disabled(app.session.activity.isBusy)
-        .help(fraction.map { "Compact context (\(Int($0 * 100))% used)" } ?? "Compact context")
+    private var modelTitle: String {
+        app.session.sessionSettings.modelRef.map(AgentSession.shortModelName) ?? "Model"
     }
 }
 
 /// A pill button used around the agent on the home screen.
 struct HomeAction: View {
     let icon: String
+    var tint: Color = .white
     let title: String
     var badge: String? = nil
     var menu = false
@@ -127,45 +91,55 @@ struct HomeAction: View {
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 6) {
+            HStack(spacing: 7) {
                 Image(systemName: icon)
                     .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 14)
+                    .foregroundStyle(prominent ? .white : tint)
+                    .frame(width: 15)
                 Text(title)
                     .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
                     .lineLimit(1)
                     .truncationMode(.middle)
+                Spacer(minLength: 0)
                 if let trailing { trailing }
                 if let badge {
                     Text(badge)
                         .font(.system(size: 9, weight: .bold).monospacedDigit())
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(.white.opacity(0.2)))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5.5)
+                        .padding(.vertical, 1.5)
+                        .background(Capsule().fill(.white.opacity(0.22)))
                 }
                 if menu {
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 7, weight: .bold))
-                        .opacity(0.5)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.4))
                 }
             }
-            .foregroundStyle(.white.opacity(isEnabled ? 0.92 : 0.4))
-            .padding(.horizontal, 11)
-            .frame(height: 28)
-            .frame(maxWidth: 150)
+            .opacity(isEnabled ? 1 : 0.4)
+            .padding(.leading, 11)
+            .padding(.trailing, 10)
+            .frame(width: 156, height: 30)
             .background {
-                Capsule().fill(
-                    prominent
-                        ? AnyShapeStyle(NotchPalette.accentGradient.opacity(hovering ? 0.75 : 0.5))
-                        : AnyShapeStyle(.white.opacity(hovering ? 0.16 : 0.09)))
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(prominent
+                          ? AnyShapeStyle(NotchPalette.accentGradient.opacity(hovering ? 0.8 : 0.6))
+                          : AnyShapeStyle(Color.white.opacity(hovering ? 0.12 : 0.065)))
             }
-            .overlay(Capsule().strokeBorder(.white.opacity(hovering ? 0.18 : 0.06)))
-            .contentShape(Capsule())
-            .scaleEffect(hovering && isEnabled ? 1.03 : 1)
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        LinearGradient(colors: [.white.opacity(hovering ? 0.22 : 0.12), .white.opacity(0.03)],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 0.75)
+            }
+            .shadow(color: prominent ? NotchPalette.siri[1].opacity(hovering ? 0.45 : 0.25) : .clear, radius: 8, y: 2)
+            .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         }
         .buttonStyle(PressableStyle())
         .onHover { hovering = $0 }
-        .animation(.snappy(duration: 0.18), value: hovering)
+        .animation(.easeOut(duration: 0.15), value: hovering)
     }
 }
 
@@ -202,10 +176,12 @@ struct AgentStage: View {
             } else if thinking {
                 ThinkingHalo()
                     .transition(.scale(scale: 0.7).combined(with: .opacity))
-            } else if hovering {
+            } else {
                 Circle()
-                    .fill(RadialGradient(colors: [NotchPalette.siri[1].opacity(0.35), .clear],
-                                         center: .center, startRadius: 4, endRadius: 52))
+                    .fill(RadialGradient(
+                        colors: [NotchPalette.siri[1].opacity(hovering ? 0.32 : 0.12), .clear],
+                        center: .center, startRadius: 4, endRadius: 54))
+                    .overlay(Circle().strokeBorder(.white.opacity(hovering ? 0.14 : 0.07), lineWidth: 0.75).padding(14))
                     .transition(.opacity)
             }
 
@@ -352,10 +328,24 @@ private struct SpeechBubble: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("You said: \(content.text)")
             } else {
-                Text(hint)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(0.35))
-                    .transition(.opacity)
+                HStack(spacing: 5) {
+                    if app.settings.pushToTalkEnabled {
+                        Text("Hold")
+                        Text(app.settings.pushToTalk.display)
+                            .font(.system(size: 10, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(RoundedRectangle(cornerRadius: 5).fill(.white.opacity(0.08)))
+                            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.white.opacity(0.12), lineWidth: 0.5))
+                        Text("or click \(app.settings.resolvedName) to talk")
+                    } else {
+                        Text("Click \(app.settings.resolvedName) to talk")
+                    }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(.white.opacity(0.38))
+                .transition(.opacity)
             }
         }
     }
@@ -374,11 +364,6 @@ private struct SpeechBubble: View {
         }
     }
 
-    private var hint: String {
-        app.settings.pushToTalkEnabled
-            ? "Hold \(app.settings.pushToTalk.display) or click \(app.settings.resolvedEmoji) to talk"
-            : "Click \(app.settings.resolvedEmoji) to talk"
-    }
 }
 
 private struct BubbleTail: Shape {

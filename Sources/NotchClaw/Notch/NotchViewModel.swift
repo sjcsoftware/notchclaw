@@ -32,7 +32,8 @@ struct NotchGeometry: Equatable {
 
 enum NotchLayout {
     static let earWidth: CGFloat = 14
-    static let homeWidth: CGFloat = 520
+    static let homeWidth: CGFloat = 556
+    static let headerTopPadding: CGFloat = 10
     static let baseExpandedWidth: CGFloat = 580
     static let minExpandedHeight: CGFloat = 150
     static let glowPadding: CGFloat = 36
