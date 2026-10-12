@@ -181,3 +181,18 @@ struct MediaURLTests {
         #expect(GatewayClient.httpURL(gateway: gateway, path: "https://cdn.example.com/a.png")?.host == "cdn.example.com")
     }
 }
+
+@MainActor
+struct NotchSizeTests {
+    @Test func testMinimizedSizeMatchesHardwareAndAppliesFineTuning() {
+        let notch = NotchViewModel()
+        notch.geometry = NotchGeometry(
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982), notchWidth: 185, notchHeight: 32, hasNotch: true)
+        // Visible body = hardware notch; the concave top ears add the corner radius on each side.
+        #expect(notch.closedSize == CGSize(width: 185 + NotchLayout.closedCorners.top * 2, height: 32))
+        notch.sizeAdjust = CGSize(width: 10, height: -4)
+        #expect(notch.closedSize == CGSize(width: 195 + NotchLayout.closedCorners.top * 2, height: 28))
+        notch.sizeAdjust = CGSize(width: -1000, height: -1000)
+        #expect(notch.closedSize.width >= 40 && notch.closedSize.height >= 8)
+    }
+}

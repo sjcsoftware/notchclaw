@@ -137,14 +137,20 @@ final class NotchController {
             let w = NotchLayout.homeWidth
             return CGRect(x: screen.midX - w / 2 - 16, y: screen.maxY - 260, width: w + 32, height: 262)
         }
+        // Minimized: exactly the black notch, so passing near it doesn't open it.
         let size = notch.closedSize
-        return CGRect(x: screen.midX - size.width / 2 - 14, y: screen.maxY - size.height - 12,
-                      width: size.width + 28, height: size.height + 14)
+        return CGRect(x: screen.midX - size.width / 2, y: screen.maxY - size.height,
+                      width: size.width, height: size.height)
+    }
+
+    /// Inclusive hit test: points on the notch's edge count as inside.
+    private static func containsInclusive(_ rect: CGRect, _ point: CGPoint) -> Bool {
+        point.x >= rect.minX && point.x <= rect.maxX && point.y >= rect.minY && point.y <= rect.maxY
     }
 
     private func pointerMoved() {
         let location = NSEvent.mouseLocation
-        let inside = interactiveRect().contains(location) || (notch.isExpanded && notch.viewHovering)
+        let inside = Self.containsInclusive(interactiveRect(), location) || (notch.isExpanded && notch.viewHovering)
         panel.ignoresMouseEvents = !inside
         guard inside != notch.isHovering else { return }
         notch.isHovering = inside
@@ -173,7 +179,7 @@ final class NotchController {
 
     private func clickedOutside() {
         // A click can slip through if click-through state was stale; never treat clicks on the notch as outside.
-        if interactiveRect().contains(NSEvent.mouseLocation) {
+        if Self.containsInclusive(interactiveRect(), NSEvent.mouseLocation) {
             pointerMoved()
             return
         }

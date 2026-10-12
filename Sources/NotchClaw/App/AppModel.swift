@@ -27,6 +27,7 @@ final class AppModel {
         notch = NotchViewModel()
         hotKey = HotKey()
 
+        notch.sizeAdjust = CGSize(width: settings.notchWidthAdjust, height: settings.notchHeightAdjust)
         session.isUserLooking = { [weak self] in self?.notch.isExpanded ?? false }
         session.onAssistantOutput = { [weak self] in self?.assistantProduced() }
         voice.onFinished = { [weak self] text in self?.handleTranscript(text) }
@@ -38,10 +39,30 @@ final class AppModel {
     func start() {
         applyConnectionSettings()
         applyHotKey()
+        observeNotchSize()
+    }
+
+    /// Keeps the minimized notch in sync with the Settings fine-tuner, live.
+    private func observeNotchSize() {
+        withObservationTracking {
+            notch.sizeAdjust = CGSize(width: settings.notchWidthAdjust, height: settings.notchHeightAdjust)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.observeNotchSize() }
+        }
     }
 
     func applyConnectionSettings() {
         gateway.configure(urlString: settings.gatewayURL, token: settings.gatewayToken)
+    }
+
+    enum SettingsTab: Hashable { case gateway, agent, notch, voice }
+
+    /// The Settings tab and window visibility decide when the notch shows its tuning outline.
+    var settingsTab: SettingsTab = .gateway { didSet { updateTuning() } }
+    var settingsVisible = false { didSet { updateTuning() } }
+
+    private func updateTuning() {
+        notch.isTuningSize = settingsVisible && settingsTab == .notch
     }
 
     /// Set when the shortcut couldn't be registered (usually another app owns it).
