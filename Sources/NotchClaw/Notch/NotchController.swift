@@ -1,0 +1,200 @@
+import AppKit
+import SwiftUI
+
+/// Borderless, non-activating overlay panel that can still take keyboard focus
+/// for the composer (Spotlight-style) without stealing activation from other apps.
+final class NotchPanel: NSPanel {
+    init() {
+        super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        isFloatingPanel = true
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        isMovable = false
+        isReleasedWhenClosed = false
+        hidesOnDeactivate = false
+        acceptsMouseMovedEvents = true
+        ignoresMouseEvents = true
+        level = .mainMenu + 3
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        animationBehavior = .none
+    }
+
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { false }
+}
+
+/// Owns the overlay panel: positions it over the notch, decides when the pointer
+/// is "in" the notch, toggles click-through, and drives expand/collapse.
+@MainActor
+final class NotchController {
+    private let app: AppModel
+    private let panel = NotchPanel()
+    private var monitors: [Any] = []
+    private var observers: [NSObjectProtocol] = []
+    private var hoverTask: Task<Void, Never>?
+    private var collapseTask: Task<Void, Never>?
+    private var pollTimer: Timer?
+
+    private var notch: NotchViewModel { app.notch }
+
+    init(app: AppModel) {
+        self.app = app
+        let hosting = NSHostingView(rootView: NotchRootView(app: app))
+        hosting.sizingOptions = []
+        panel.contentView = hosting
+        notch.requestKeyWindow = { [weak self] in self?.panel.makeKey() }
+        layout()
+        panel.orderFrontRegardless()
+        installMonitors()
+        observeLayoutSettings()
+    }
+
+    // MARK: Layout
+
+    func layout() {
+        guard let screen = NotchGeometry.preferredScreen() else { return }
+        notch.geometry = .of(screen)
+        let maxSize = notch.maxExpandedSize(settings: app.settings)
+        let width = maxSize.width + NotchLayout.glowPadding * 2
+        let height = maxSize.height + NotchLayout.glowPadding
+        let frame = CGRect(
+            x: screen.frame.midX - width / 2, y: screen.frame.maxY - height, width: width, height: height)
+        panel.setFrame(frame.integral, display: true)
+    }
+
+    private func observeLayoutSettings() {
+        withObservationTracking {
+            _ = app.settings.maxWidthFraction
+            _ = app.settings.maxHeightFraction
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                self?.layout()
+                self?.observeLayoutSettings()
+            }
+        }
+    }
+
+    // MARK: Pointer tracking
+
+    private func installMonitors() {
+        let moveEvents: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged]
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: moveEvents, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+        }) { monitors.append(global) }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: moveEvents, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.pointerMoved() }
+            return event
+        }) { monitors.append(local) }
+        // Clicks in other apps dismiss the expanded notch.
+        if let clicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.clickedOutside() }
+        }) { monitors.append(clicks) }
+
+        let center = NotificationCenter.default
+        observers.append(center.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.layout() }
+        })
+        observers.append(center.addObserver(forName: NSMenu.didBeginTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.notch.isMenuOpen = true }
+        })
+        observers.append(center.addObserver(forName: NSMenu.didEndTrackingNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.notch.isMenuOpen = false
+                self?.pointerMoved()
+            }
+        })
+        observers.append(NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.panel.orderFrontRegardless() }
+        })
+
+        // Safety net: monitors can miss exits (e.g. fast flicks, menus). Poll cheaply.
+        pollTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.notch.isExpanded || self.notch.isHovering else { return }
+                self.pointerMoved()
+            }
+        }
+    }
+
+    /// The region that currently counts as "the notch" in screen coordinates.
+    private func interactiveRect() -> CGRect {
+        let screen = notch.geometry.screenFrame
+        if notch.isExpanded {
+            let size = notch.expandedSize == .zero
+                ? CGSize(width: NotchLayout.baseExpandedWidth, height: 200) : notch.expandedSize
+            return CGRect(x: screen.midX - size.width / 2 - 6, y: screen.maxY - size.height - 8,
+                          width: size.width + 12, height: size.height + 10)
+        }
+        let size = notch.closedSize
+        return CGRect(x: screen.midX - size.width / 2 - 10, y: screen.maxY - size.height - 10,
+                      width: size.width + 20, height: size.height + 12)
+    }
+
+    private func pointerMoved() {
+        let location = NSEvent.mouseLocation
+        let inside = interactiveRect().contains(location)
+        panel.ignoresMouseEvents = !inside
+        guard inside != notch.isHovering else { return }
+        notch.isHovering = inside
+        inside ? pointerEntered() : pointerExited()
+    }
+
+    private func pointerEntered() {
+        collapseTask?.cancel()
+        guard !notch.isExpanded else { return }
+        // Don't pop open while the user is dragging something across the top edge.
+        guard NSEvent.pressedMouseButtons == 0 else { return }
+        hoverTask?.cancel()
+        hoverTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(90))
+            guard !Task.isCancelled, let self, self.notch.isHovering else { return }
+            self.notch.expand()
+            self.app.session.clearAttention()
+        }
+    }
+
+    private func pointerExited() {
+        hoverTask?.cancel()
+        guard notch.isExpanded else { return }
+        scheduleCollapse(after: 0.35)
+    }
+
+    private func clickedOutside() {
+        guard notch.isExpanded, !notch.isPinned, !app.voice.isActive else { return }
+        collapse()
+    }
+
+    private func scheduleCollapse(after delay: TimeInterval) {
+        collapseTask?.cancel()
+        collapseTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, let self else { return }
+            guard !self.notch.isHovering, self.notch.canAutoCollapse, !self.app.voice.isActive else { return }
+            self.collapse()
+        }
+    }
+
+    private func collapse() {
+        notch.collapse()
+        if panel.isKeyWindow {
+            // Hand keyboard focus back to whatever the user was using.
+            panel.resignKey()
+            panel.orderOut(nil)
+            panel.orderFrontRegardless()
+        }
+        pointerMoved()
+    }
+
+    func toggle() {
+        if notch.isExpanded {
+            collapse()
+        } else {
+            notch.expand()
+            app.session.clearAttention()
+            notch.focusRequest += 1
+        }
+    }
+}
