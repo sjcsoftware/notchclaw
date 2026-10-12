@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "skills": {
+    "macos-app-design": {
+      "source": "petekp/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/macos-app-design/SKILL.md",
+      "computedHash": "5029321dfc7eb85d56175b1552c509b8be68ace721cd4aea6b09cc89153350c7"
+    },
+    "macos-notch-ui": {
+      "source": "fayazara/macos-app-skills",
+      "sourceType": "github",
+      "skillPath": "notch-ui/SKILL.md",
+      "computedHash": "e39093236fbccf2957182c117af013129000985205a3bf65c39eb42a7606afd4"
+    },
+    "swiftui-animation": {
+      "source": "dpearson2699/swift-ios-skills",
+      "sourceType": "github",
+      "skillPath": "skills/swiftui-animation/SKILL.md",
+      "computedHash": "af57bc4f78457178fdadb7a78728baf55aa88d12fcfa0b5bd25cbdbc8dcee3b0"
+    },
+    "swiftui-expert-skill": {
+      "source": "avdlee/swiftui-agent-skill",
+      "sourceType": "github",
+      "skillPath": "skills/swiftui-expert-skill/SKILL.md",
+      "computedHash": "5388cd2368b525d2906798ac313c70415e971da35670e571e98baf8a7140505f"
+    }
+  }
+}
