@@ -167,7 +167,7 @@ private struct ThinkingRow: View {
     }
 }
 
-private struct ToastView: View {
+struct ToastView: View {
     let message: String?
 
     var body: some View {
@@ -191,116 +191,7 @@ private struct ToastView: View {
 
 // MARK: - Controls
 
-struct ControlsRow: View {
-    let app: AppModel
-
-    var body: some View {
-        let session = app.session
-        let settings = session.sessionSettings
-        HStack(spacing: 6) {
-            Menu {
-                Button("Default model") { session.setModel(nil) }
-                let providers = Dictionary(grouping: session.models, by: \.provider)
-                ForEach(providers.keys.sorted(), id: \.self) { provider in
-                    Section(provider) {
-                        ForEach(providers[provider] ?? []) { model in
-                            Button {
-                                session.setModel(model.id)
-                            } label: {
-                                if model.id == settings.modelRef { Label(model.name, systemImage: "checkmark") }
-                                else { Text(model.name) }
-                            }
-                        }
-                    }
-                }
-                if session.models.isEmpty { Text("No models reported by the gateway") }
-            } label: {
-                chip(icon: "cpu", text: settings.modelRef.map(AgentSession.shortModelName) ?? "Model")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Model")
-            .accessibilityLabel("Model")
-
-            Menu {
-                Button("Default effort") { session.setThinking(nil) }
-                Divider()
-                ForEach(settings.thinkingOptions, id: \.self) { level in
-                    Button {
-                        session.setThinking(level)
-                    } label: {
-                        if level == settings.thinkingLevel { Label(level.capitalized, systemImage: "checkmark") }
-                        else { Text(level.capitalized) }
-                    }
-                }
-            } label: {
-                chip(icon: "brain", text: settings.thinkingLevel?.capitalized ?? "Effort")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Reasoning effort")
-            .accessibilityLabel("Reasoning effort")
-
-            Button {
-                session.compact()
-            } label: {
-                HStack(spacing: 4) {
-                    Image(systemName: "rectangle.compress.vertical")
-                    Text("Compact")
-                    if let fraction = settings.contextFraction {
-                        ContextRing(fraction: fraction)
-                    }
-                }
-            }
-            .buttonStyle(ChipButtonStyle())
-            .disabled(session.activity.isBusy)
-            .help(settings.contextFraction.map { "Compact context (\(Int($0 * 100))% used)" } ?? "Compact context")
-
-            Spacer(minLength: 4)
-
-            if session.activity.isBusy && session.activity != .compacting {
-                Button { session.abort() } label: { Image(systemName: "stop.fill") }
-                    .buttonStyle(IconButtonStyle(active: true))
-                    .help("Stop")
-                    .accessibilityLabel("Stop reply")
-                    .transition(.scale.combined(with: .opacity))
-            }
-            Button { session.newSession() } label: { Image(systemName: "square.and.pencil") }
-                .buttonStyle(IconButtonStyle())
-                .help("New session")
-                .accessibilityLabel("New session")
-            Button { app.notch.isPinned.toggle() } label: {
-                Image(systemName: app.notch.isPinned ? "pin.fill" : "pin")
-            }
-            .buttonStyle(IconButtonStyle(active: app.notch.isPinned))
-            .help(app.notch.isPinned ? "Unpin (collapse when the pointer leaves)" : "Keep open")
-            .accessibilityLabel(app.notch.isPinned ? "Unpin notch" : "Pin notch open")
-            Button { app.openSettings() } label: { Image(systemName: "gearshape") }
-                .buttonStyle(IconButtonStyle())
-                .help("Settings (⌘,)")
-                .accessibilityLabel("Settings")
-        }
-        .animation(.snappy, value: session.activity.isBusy)
-    }
-
-    private func chip(icon: String, text: String) -> some View {
-        HStack(spacing: 4) {
-            Image(systemName: icon)
-            Text(text).lineLimit(1)
-            Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold)).opacity(0.5)
-        }
-        .font(.system(size: 11, weight: .medium))
-        .foregroundStyle(.white.opacity(0.85))
-        .padding(.horizontal, 9)
-        .padding(.vertical, 5)
-        .background(Capsule().fill(.white.opacity(0.1)))
-        .frame(maxWidth: 170)
-    }
-}
-
-private struct ContextRing: View {
+struct ContextRing: View {
     let fraction: Double
 
     var body: some View {
@@ -338,9 +229,17 @@ struct Composer: View {
                 .padding(.leading, 12)
                 .accessibilityLabel("Message")
 
+            if app.session.activity.isBusy && app.session.activity != .compacting {
+                Button { app.session.abort() } label: { Image(systemName: "stop.fill") }
+                    .buttonStyle(IconButtonStyle(active: true))
+                    .padding(.bottom, 4)
+                    .help("Stop the reply")
+                    .accessibilityLabel("Stop reply")
+                    .transition(.scale.combined(with: .opacity))
+            }
+
             Button {
-                if app.voice.isActive { app.voice.end() }
-                else { app.voice.begin(localeIdentifier: app.settings.speechLocale) }
+                app.toggleListening()
             } label: {
                 Image(systemName: app.voice.isActive ? "waveform" : "mic.fill")
                     .symbolEffect(.variableColor.iterative, isActive: app.voice.isActive)
@@ -369,16 +268,23 @@ struct Composer: View {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .strokeBorder(focused ? AnyShapeStyle(NotchPalette.accentGradient.opacity(0.7)) : AnyShapeStyle(.white.opacity(0.1)), lineWidth: 1))
         .animation(.easeOut(duration: 0.2), value: focused)
+        .animation(.snappy, value: app.session.activity.isBusy)
+
         .onChange(of: focused) { _, value in notch.composerFocused = value }
-        .onChange(of: notch.focusRequest) { _, _ in
-            notch.requestKeyWindow()
-            focused = true
-        }
+        .onChange(of: notch.wantsComposerFocus) { _, _ in takeFocusIfRequested() }
+        .onAppear(perform: takeFocusIfRequested)
         .onKeyPress(.escape) {
             if !notch.composerText.isEmpty { notch.composerText = ""; return .handled }
-            notch.collapse()
+            notch.page = .home
             return .handled
         }
+    }
+
+    private func takeFocusIfRequested() {
+        guard app.notch.wantsComposerFocus else { return }
+        app.notch.wantsComposerFocus = false
+        app.notch.requestKeyWindow()
+        Task { @MainActor in focused = true }
     }
 
     private var canSend: Bool { !app.notch.composerText.trimmed.isEmpty && app.gateway.state.isConnected }

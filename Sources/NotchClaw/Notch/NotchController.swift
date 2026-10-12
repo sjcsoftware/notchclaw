@@ -24,6 +24,11 @@ final class NotchPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// Lets the first click on the notch press a button even while another app is active.
+final class FirstMouseHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// Owns the overlay panel: positions it over the notch, decides when the pointer
 /// is "in" the notch, toggles click-through, and drives expand/collapse.
 @MainActor
@@ -40,7 +45,7 @@ final class NotchController {
 
     init(app: AppModel) {
         self.app = app
-        let hosting = NSHostingView(rootView: NotchRootView(app: app))
+        let hosting = FirstMouseHostingView(rootView: NotchRootView(app: app))
         hosting.sizingOptions = []
         panel.contentView = hosting
         notch.requestKeyWindow = { [weak self] in self?.panel.makeKey() }
@@ -122,20 +127,24 @@ final class NotchController {
     /// The region that currently counts as "the notch" in screen coordinates.
     private func interactiveRect() -> CGRect {
         let screen = notch.geometry.screenFrame
+        if notch.isExpanded, notch.contentFrame.width > 0 {
+            // Convert the measured SwiftUI frame (top-left origin) to screen space.
+            let f = notch.contentFrame
+            let rect = CGRect(x: panel.frame.minX + f.minX, y: panel.frame.maxY - f.maxY, width: f.width, height: f.height)
+            return rect.insetBy(dx: -16, dy: -16)
+        }
         if notch.isExpanded {
-            let size = notch.expandedSize == .zero
-                ? CGSize(width: NotchLayout.baseExpandedWidth, height: 200) : notch.expandedSize
-            return CGRect(x: screen.midX - size.width / 2 - 6, y: screen.maxY - size.height - 8,
-                          width: size.width + 12, height: size.height + 10)
+            let w = NotchLayout.homeWidth
+            return CGRect(x: screen.midX - w / 2 - 16, y: screen.maxY - 260, width: w + 32, height: 262)
         }
         let size = notch.closedSize
-        return CGRect(x: screen.midX - size.width / 2 - 10, y: screen.maxY - size.height - 10,
-                      width: size.width + 20, height: size.height + 12)
+        return CGRect(x: screen.midX - size.width / 2 - 14, y: screen.maxY - size.height - 12,
+                      width: size.width + 28, height: size.height + 14)
     }
 
     private func pointerMoved() {
         let location = NSEvent.mouseLocation
-        let inside = interactiveRect().contains(location)
+        let inside = interactiveRect().contains(location) || (notch.isExpanded && notch.viewHovering)
         panel.ignoresMouseEvents = !inside
         guard inside != notch.isHovering else { return }
         notch.isHovering = inside
@@ -159,10 +168,15 @@ final class NotchController {
     private func pointerExited() {
         hoverTask?.cancel()
         guard notch.isExpanded else { return }
-        scheduleCollapse(after: 0.35)
+        scheduleCollapse(after: 0.5)
     }
 
     private func clickedOutside() {
+        // A click can slip through if click-through state was stale; never treat clicks on the notch as outside.
+        if interactiveRect().contains(NSEvent.mouseLocation) {
+            pointerMoved()
+            return
+        }
         guard notch.isExpanded, !notch.isPinned, !app.voice.isActive else { return }
         collapse()
     }
@@ -172,7 +186,9 @@ final class NotchController {
         collapseTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(delay))
             guard !Task.isCancelled, let self else { return }
-            guard !self.notch.isHovering, self.notch.canAutoCollapse, !self.app.voice.isActive else { return }
+            guard !self.notch.isHovering, !self.notch.viewHovering, self.notch.canAutoCollapse,
+                  !self.app.voice.isActive, NSEvent.pressedMouseButtons == 0
+            else { return }
             self.collapse()
         }
     }
@@ -194,7 +210,6 @@ final class NotchController {
         } else {
             notch.expand()
             app.session.clearAttention()
-            notch.focusRequest += 1
         }
     }
 }

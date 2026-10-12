@@ -1,17 +1,18 @@
 import SwiftUI
 
-struct ExpandedNotchView: View {
+/// The chat page: conversation transcript plus composer.
+struct ChatView: View {
     let app: AppModel
 
     var body: some View {
         let notch = app.notch
         let maxSize = notch.maxExpandedSize(settings: app.settings)
         let width = wantsWide ? maxSize.width : min(NotchLayout.baseExpandedWidth, maxSize.width)
-        let chrome: CGFloat = notch.geometry.notchHeight + 132
+        let chrome: CGFloat = notch.geometry.notchHeight + 96
         let conversationMax = max(90, maxSize.height - chrome - bannerAllowance)
 
         VStack(spacing: 10) {
-            TopBar(app: app)
+            ChatTopBar(app: app)
                 .frame(height: notch.geometry.notchHeight)
             ConnectionBanner(app: app)
             ForEach(app.session.approvals) { approval in
@@ -24,13 +25,11 @@ struct ExpandedNotchView: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
             ConversationView(app: app, maxHeight: conversationMax)
-            ControlsRow(app: app)
             Composer(app: app)
         }
         .padding(.horizontal, NotchLayout.openCorners.top + 12)
         .padding(.bottom, 14)
         .frame(width: width)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { notch.expandedSize = $0 }
         .animation(.spring(response: 0.45, dampingFraction: 0.86), value: wantsWide)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: app.voice.phase)
     }
@@ -52,25 +51,42 @@ struct ExpandedNotchView: View {
 
 // MARK: - Top bar
 
-private struct TopBar: View {
+private struct ChatTopBar: View {
     let app: AppModel
 
     var body: some View {
         HStack(spacing: 0) {
-            HStack(spacing: 7) {
-                AgentAvatar(
-                    emoji: app.settings.resolvedEmoji, size: 15,
-                    thinking: app.session.activity.isBusy, dimmed: !app.gateway.state.isConnected)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(app.settings.resolvedName)
-                        .font(.system(size: 12.5, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    statusLine
+            HStack(spacing: 6) {
+                Button {
+                    app.notch.page = .home
+                } label: {
+                    Image(systemName: "chevron.left")
                 }
+                .buttonStyle(IconButtonStyle())
+                .help("Back to \(app.settings.resolvedName)")
+                .accessibilityLabel("Back")
+                AgentAvatar(
+                    emoji: app.settings.resolvedEmoji, size: 13,
+                    thinking: app.session.activity.isBusy, dimmed: !app.gateway.state.isConnected)
+                AgentStatusLine(app: app)
             }
             Spacer(minLength: app.notch.geometry.notchWidth + 12)
             UsageCluster(app: app)
+        }
+    }
+}
+
+/// Name plus a live status line (thinking / replying / model / connection).
+struct AgentStatusLine: View {
+    let app: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(app.settings.resolvedName)
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+            statusLine
         }
     }
 
@@ -116,29 +132,30 @@ private struct TopBar: View {
     }
 }
 
-private struct UsageCluster: View {
+struct UsageCluster: View {
     let app: AppModel
 
     var body: some View {
         if app.settings.showUsage, let usage = app.session.usage, !usage.windows.isEmpty {
-            Menu {
-                Picker("Usage window", selection: Binding(
-                    get: { app.settings.usageWindow }, set: { app.settings.usageWindow = $0 })) {
-                    ForEach(UsageWindowChoice.allCases) { choice in
-                        let window = usage.window(for: choice)
-                        Text(window.map { "\(choice.title) — \(Int($0.usedPercent))% used" } ?? "\(choice.title) — unavailable")
-                            .tag(choice)
-                    }
+            Button {
+                var entries: [PopupMenu.Entry] = [.header("\(usage.providerName) usage")]
+                for choice in UsageWindowChoice.allCases {
+                    let window = usage.window(for: choice)
+                    let title = window.map { "\(choice.title) — \(Int($0.usedPercent))% used" } ?? "\(choice.title) — unavailable"
+                    entries.append(.item(title, checked: app.settings.usageWindow == choice, enabled: window != nil) {
+                        app.settings.usageWindow = choice
+                    })
                 }
-                .pickerStyle(.inline)
-                if let plan = usage.plan { Text("Plan: \(plan.capitalized)") }
+                if let plan = usage.plan {
+                    entries.append(.separator)
+                    entries.append(.item("Plan: \(plan.capitalized)", enabled: false) {})
+                }
+                PopupMenu.show(entries)
             } label: {
                 label(usage: usage)
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("Codex subscription usage")
+            .buttonStyle(.plain)
+            .help("Codex subscription usage — click to choose the window")
         }
     }
 
@@ -166,7 +183,7 @@ private struct UsageCluster: View {
 
 // MARK: - Banners & cards
 
-private struct ConnectionBanner: View {
+struct ConnectionBanner: View {
     let app: AppModel
     @State private var copied = false
 
@@ -238,7 +255,7 @@ private struct ConnectionBanner: View {
     }
 }
 
-private struct ApprovalCard: View {
+struct ApprovalCard: View {
     let approval: PendingApproval
     let resolve: (String) -> Void
 
@@ -284,7 +301,7 @@ private struct ApprovalCard: View {
     }
 }
 
-private struct ListeningCard: View {
+struct ListeningCard: View {
     let voice: VoiceController
 
     var body: some View {

@@ -31,7 +31,8 @@ struct NotchGeometry: Equatable {
 }
 
 enum NotchLayout {
-    static let earWidth: CGFloat = 40
+    static let earWidth: CGFloat = 14
+    static let homeWidth: CGFloat = 520
     static let baseExpandedWidth: CGFloat = 580
     static let minExpandedHeight: CGFloat = 150
     static let glowPadding: CGFloat = 36
@@ -43,17 +44,25 @@ enum NotchLayout {
 @MainActor
 @Observable
 final class NotchViewModel {
+    enum Page { case home, chat }
+
     var geometry: NotchGeometry = .fallback
     private(set) var isExpanded = false
+    /// Home (agent + controls) is the default; chat opens on demand or when a reply arrives.
+    var page: Page = .home
+    /// A reply arrived while collapsed: the next open goes straight to chat.
+    var chatPending = false
     var isHovering = false
+    /// SwiftUI's own hover signal for the visible notch content.
+    var viewHovering = false
+    /// Visible notch content frame in the hosting view's (top-left origin) coordinates.
+    var contentFrame: CGRect = .zero
     var composerText = ""
     var composerFocused = false
     var isPinned = false
     var isMenuOpen = false
-    /// Measured size of the expanded panel, used for hit-testing.
-    var expandedSize: CGSize = .zero
-    /// Bumped to ask the composer to take focus.
-    var focusRequest = 0
+    /// Asks the composer to take keyboard focus once it is on screen.
+    var wantsComposerFocus = false
     /// Makes the overlay panel key so the composer can receive typing.
     @ObservationIgnored var requestKeyWindow: () -> Void = {}
 
@@ -68,8 +77,11 @@ final class NotchViewModel {
         return CGSize(width: min(width, frame.width - 40), height: min(height, frame.height - 40))
     }
 
-    func expand() {
+    func expand(page requested: Page? = nil) {
+        if let requested { page = requested }
         guard !isExpanded else { return }
+        if requested == nil { page = chatPending ? .chat : .home }
+        chatPending = false
         isExpanded = true
         if UserDefaults.standard.object(forKey: "hapticFeedback") as? Bool ?? true {
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
@@ -80,6 +92,13 @@ final class NotchViewModel {
         guard isExpanded else { return }
         isExpanded = false
         composerFocused = false
+        viewHovering = false
+        if !isPinned { page = .home }
+    }
+
+    func showChat(focusComposer: Bool) {
+        page = .chat
+        if focusComposer { wantsComposerFocus = true }
     }
 
     /// Whether leaving the panel should close it.

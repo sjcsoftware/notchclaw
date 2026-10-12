@@ -28,6 +28,7 @@ final class AppModel {
         hotKey = HotKey()
 
         session.isUserLooking = { [weak self] in self?.notch.isExpanded ?? false }
+        session.onAssistantOutput = { [weak self] in self?.assistantProduced() }
         voice.onFinished = { [weak self] text in self?.handleTranscript(text) }
         hotKey.onPress = { [weak self] in self?.pushToTalkPressed() }
         hotKey.onRelease = { [weak self] in self?.pushToTalkReleased() }
@@ -48,12 +49,21 @@ final class AppModel {
 
     // MARK: Push-to-talk
 
-    private var expandedForVoice = false
+    /// The last thing the user said, shown in the speech bubble under the agent until it replies.
+    private(set) var spokenText: String?
+    @ObservationIgnored private var expandedForVoice = false
+    @ObservationIgnored private var bubbleTask: Task<Void, Never>?
+
+    func toggleListening() {
+        if voice.isActive { pushToTalkReleased() } else { pushToTalkPressed() }
+    }
 
     private func pushToTalkPressed() {
         expandedForVoice = !notch.isExpanded
         notch.expand()
         session.clearAttention()
+        bubbleTask?.cancel()
+        spokenText = nil
         voice.begin(localeIdentifier: settings.speechLocale)
     }
 
@@ -66,21 +76,40 @@ final class AppModel {
             if expandedForVoice, !notch.isHovering { notch.collapse() }
             return
         }
+        spokenText = text
         if let command = VoiceCommand.parse(text) {
             perform(command)
+            clearBubble(after: 2.5, collapse: true)
         } else if settings.autoSendVoice {
             session.send(text)
+            // Stay open on the home screen while the agent thinks; the reply opens chat.
         } else {
+            spokenText = nil
             notch.composerText = text
-            notch.focusRequest += 1
-            return
+            notch.showChat(focusComposer: true)
         }
-        // Keep the notch open briefly so the user sees the result, then let hover rules take over.
-        if expandedForVoice {
-            Task {
-                try? await Task.sleep(for: .seconds(2.5))
-                if !notch.isHovering, notch.canAutoCollapse, !voice.isActive { notch.collapse() }
+    }
+
+    private func clearBubble(after delay: TimeInterval, collapse: Bool) {
+        bubbleTask?.cancel()
+        bubbleTask = Task {
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            spokenText = nil
+            if collapse, expandedForVoice, !notch.isHovering, notch.page == .home, !voice.isActive {
+                notch.collapse()
             }
+        }
+    }
+
+    /// Replies always land in the chat screen: switch now if open, otherwise on next open.
+    private func assistantProduced() {
+        bubbleTask?.cancel()
+        spokenText = nil
+        if notch.isExpanded {
+            notch.showChat(focusComposer: false)
+        } else {
+            notch.chatPending = true
         }
     }
 

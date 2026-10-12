@@ -10,13 +10,13 @@ final class AgentSession {
         + "bullet or numbered lists, tables for comparisons, **bold** for key terms, and fenced code blocks "
         + "with a language tag for any code or commands. Keep it skimmable.</notchclaw-format>"
 
-    private(set) var items: [ChatItem] = []
+    internal(set) var items: [ChatItem] = []
     private(set) var activity: AgentActivity = .idle
     private(set) var attention: AttentionReason?
     private(set) var approvals: [PendingApproval] = []
-    private(set) var usage: UsageInfo?
+    internal(set) var usage: UsageInfo?
     private(set) var models: [ModelOption] = []
-    private(set) var sessionSettings = SessionSettings()
+    internal(set) var sessionSettings = SessionSettings()
     private(set) var toast: String?
     private(set) var historyLoaded = false
 
@@ -30,6 +30,8 @@ final class AgentSession {
     /// Lets the UI suppress attention while the user is already looking.
     @ObservationIgnored var isUserLooking: () -> Bool = { false }
     @ObservationIgnored var onAttention: ((AttentionReason) -> Void)?
+    /// Fired when the agent starts producing (or finishes) visible reply text.
+    @ObservationIgnored var onAssistantOutput: (() -> Void)?
 
     init(gateway: GatewayClient, settings: AppSettings) {
         self.gateway = gateway
@@ -349,7 +351,9 @@ final class AgentSession {
                 else if replace { item.text = delta }
                 else { item.text += delta }
             }
+            let wasStreaming = activity == .streaming
             activity = .streaming
+            if !wasStreaming { onAssistantOutput?() }
         case "final":
             let finalText = p["message"].flatMap { $0["openclawDisplayContent"].flatMap(MessageText.extract) ?? MessageText.extract($0) }
             upsertAssistant(runId: runId) { item in
@@ -358,6 +362,7 @@ final class AgentSession {
             }
             removeEmptyAssistant(runId: runId)
             finishRun(runId)
+            if items.last?.role == .assistant { onAssistantOutput?() }
             raiseAttention(.reply)
             refreshUsage()
             refreshSessionSettings()
