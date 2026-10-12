@@ -175,9 +175,7 @@ struct CodeBlockView: View {
             .background(.white.opacity(0.04))
 
             HorizontalScroll {
-                Text(code)
-                    .font(.system(size: size, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.88))
+                Text(SyntaxHighlighter.highlight(code, language: language, size: size))
                     .lineSpacing(2)
                     .fixedSize(horizontal: true, vertical: true)
                     .padding(10)

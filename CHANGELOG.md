@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.5.1
+- Syntax highlighting in code blocks: keywords, strings, numbers, comments, types, functions, built-ins, and decorators, for Python, Swift, JavaScript/TypeScript, shell, JSON, Go, Rust, C-family, Java/Kotlin, Ruby, SQL, YAML, CSS, PHP, and Lua. Unknown languages stay plain.
+
 ## 0.5.0
 - The minimized notch opens only when the pointer is actually inside it (edges included), not when it passes nearby.
 - New **Settings › Notch › Minimized notch size** tuner: adjust width and height with sliders or steppers and watch the notch resize live, outlined in blue, to match your Mac's hardware notch.

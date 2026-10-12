@@ -35,6 +35,33 @@ enum SnapshotRenderer {
             app.spokenText = "Compare my last three months of cloud spend"
             app.session.activity = .thinking(phase: "Gathering context")
         }
+        // Chat with a syntax-highlighted code reply.
+        scene(url, "code", height: 470) { app in
+            app.notch.expand(page: .chat)
+            app.session.items = [
+                ChatItem(id: "1", role: .user, text: "Write a quick Python function that inverts a binary tree."),
+                ChatItem(id: "2", role: .assistant, text: """
+                ### Invert a Binary Tree
+
+                ```python
+                from typing import Optional
+
+                @dataclass
+                class Node:
+                    value: int
+                    left: Optional["Node"] = None
+                    right: Optional["Node"] = None
+
+                def inverse(root: Optional[Node]) -> Optional[Node]:
+                    \"\"\"Swap left/right children at every node.\"\"\"
+                    if root is None:
+                        return None  # empty subtree
+                    root.left, root.right = inverse(root.right), inverse(root.left)
+                    return root
+                ```
+                """),
+            ]
+        }
         // Chat with a rich Markdown reply and a native chart.
         scene(url, "chat", height: 580) { app in
             app.notch.expand(page: .chat)
