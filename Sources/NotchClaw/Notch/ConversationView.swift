@@ -31,6 +31,13 @@ struct ConversationView: View {
                 // A plain VStack: a lazy stack leaves freshly revealed rows blank when the
                 // scroll view grows to its measured height on appear.
                 VStack(alignment: .leading, spacing: 14) {
+                    if session.hasOlderHistory {
+                        EarlierMessagesRow(loading: session.isLoadingOlder) { loadOlder(proxy) }
+                            .onGeometryChange(for: Bool.self) { $0.frame(in: .named("chatScroll")).maxY > -80 } action: { nearTop in
+                                // Reaching the top loads earlier messages automatically.
+                                if nearTop, !isAtBottom || contentHeight <= viewportHeight { loadOlder(proxy) }
+                            }
+                    }
                     if session.items.isEmpty {
                         EmptyConversation(app: app)
                     }
@@ -89,6 +96,20 @@ struct ConversationView: View {
             }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showsPendingThinking)
+    }
+
+    /// Loads older history and keeps the message you were looking at in place.
+    private func loadOlder(_ proxy: ScrollViewProxy) {
+        let session = app.session
+        guard session.hasOlderHistory, !session.isLoadingOlder else { return }
+        let anchor = session.items.first?.id
+        session.loadOlderHistory()
+        guard let anchor else { return }
+        Task { @MainActor in
+            // Wait for the prepend, then pin the previous first message to the top.
+            for _ in 0..<40 where session.isLoadingOlder { try? await Task.sleep(for: .milliseconds(50)) }
+            proxy.scrollTo(anchor, anchor: .top)
+        }
     }
 
     /// Live run progress: a full card before reply text arrives, then a one-line
@@ -501,5 +522,30 @@ private struct JumpToBottomButton: View {
         .animation(.easeOut(duration: 0.12), value: hovering)
         .help("Jump to the latest message")
         .accessibilityLabel("Jump to latest message")
+    }
+}
+
+/// Top-of-transcript row: loads earlier messages (automatically when reached, or on click).
+private struct EarlierMessagesRow: View {
+    let loading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if loading {
+                ProgressView().controlSize(.mini)
+                Text("Loading earlier messages…")
+            } else {
+                Button(action: action) {
+                    Label("Earlier messages", systemImage: "arrow.up")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.white.opacity(0.4))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+        .accessibilityLabel(loading ? "Loading earlier messages" : "Load earlier messages")
     }
 }

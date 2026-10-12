@@ -49,7 +49,23 @@ wss.on('connection', (ws) => {
       return res(f.id, true, { type: 'hello-ok', protocol: 4, server: { version: 'mock-2026.8', connId: 'c1' }, features: { methods: [], events: [] }, snapshot: {}, auth: { role: 'operator', scopes: p.scopes, deviceToken: 'devtok' }, policy: { maxPayload: 26214400, maxBufferedBytes: 52428800, tickIntervalMs: 15000 } });
     }
     switch (f.method) {
-      case 'chat.history': return res(f.id, true, { messages: [{ role: 'user', content: [{ type: 'text', text: '<notchclaw-format>x</notchclaw-format>\n\nold question' }] }, { role: 'assistant', content: [{ type: 'text', text: 'old **answer**' }] }], sessionInfo: { model: 'gpt-5.1-codex', modelProvider: 'openai-codex', thinkingLevel: 'medium', totalTokens: 1000, contextTokens: 200000 } });
+      case 'chat.history':
+        if (process.env.MOCK_LONG_HISTORY) {
+          // 80 tool-heavy turns: user, tool call, 2 tool results, answer (2 of 5 rows visible).
+          const rows = [];
+          for (let t = 1; t <= 80; t++) {
+            rows.push({ role: 'user', content: [{ type: 'text', text: `Question ${t}` }], __openclaw: { id: `u${t}` } });
+            rows.push({ role: 'assistant', content: [{ type: 'toolCall', name: 'exec', arguments: {} }], __openclaw: { id: `c${t}` } });
+            rows.push({ role: 'toolResult', content: [{ type: 'text', text: 'ok' }], __openclaw: { id: `r${t}a` } });
+            rows.push({ role: 'toolResult', content: [{ type: 'text', text: 'ok' }], __openclaw: { id: `r${t}b` } });
+            rows.push({ role: 'assistant', content: [{ type: 'text', text: `Answer ${t}` }], __openclaw: { id: `a${t}` } });
+          }
+          const limit = f.params.limit || 40, offset = f.params.offset || 0, total = rows.length;
+          const end = total - offset, start = Math.max(0, end - limit);
+          const hasMore = start > 0;
+          return res(f.id, true, { messages: rows.slice(start, end), hasMore, ...(hasMore ? { nextOffset: offset + (end - start) } : {}), totalMessages: total, sessionKey: f.params.sessionKey });
+        }
+        return res(f.id, true, { messages: [{ role: 'user', content: [{ type: 'text', text: '<notchclaw-format>x</notchclaw-format>\n\nold question' }] }, { role: 'assistant', content: [{ type: 'text', text: 'old **answer**' }] }], sessionInfo: { model: 'gpt-5.1-codex', modelProvider: 'openai-codex', thinkingLevel: 'medium', totalTokens: 1000, contextTokens: 200000 } });
       case 'sessions.describe': return res(f.id, true, { session: { key: 'agent:main:main', model: 'gpt-5.1-codex', modelProvider: 'openai-codex', thinkingLevel: 'medium' } });
       case 'models.list': return res(f.id, true, { models: [{ id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex', provider: 'openai-codex' }, { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', provider: 'anthropic' }] });
       case 'usage.status': return res(f.id, true, { updatedAt: Date.now(), providers: [{ provider: 'openai', displayName: 'Codex', plan: 'plus', windows: [{ label: '5h', usedPercent: 37, resetAt: Date.now() + 3600e3 }, { label: 'Week', usedPercent: 64 }] }] });

@@ -122,11 +122,21 @@ final class AgentSession {
         didConnect()
     }
 
+    /// Rows per history page. Tool calls and results are rows too, so pages are generous.
+    nonisolated static let historyPageSize = 150
+
+    /// Whether older transcript rows exist beyond what's loaded.
+    private(set) var hasOlderHistory = false
+    private(set) var isLoadingOlder = false
+    @ObservationIgnored private var olderOffset: Int?
+
     func loadHistory() {
         Task {
             do {
                 let result = try await gateway.request(
-                    "chat.history", ["sessionKey": .string(sessionKey), "limit": 40], timeout: 20)
+                    "chat.history",
+                    ["sessionKey": .string(sessionKey), "limit": .int(Int64(Self.historyPageSize))],
+                    timeout: 25)
                 applyHistory(result)
             } catch {
                 Log.error("chat.history failed: \(error.localizedDescription)")
@@ -134,7 +144,40 @@ final class AgentSession {
         }
     }
 
-    private func applyHistory(_ result: JSON) {
+    /// Fetches the next older page(s) and prepends them. Skips ahead past pages that hold
+    /// only tool rows so scrolling up always reveals earlier conversation.
+    func loadOlderHistory() {
+        guard hasOlderHistory, !isLoadingOlder, let start = olderOffset, gateway.state.isConnected else { return }
+        isLoadingOlder = true
+        Task {
+            defer { isLoadingOlder = false }
+            var offset = start
+            for _ in 0..<5 {
+                guard let result = try? await gateway.request(
+                    "chat.history",
+                    ["sessionKey": .string(sessionKey), "limit": .int(Int64(Self.historyPageSize)), "offset": .int(Int64(offset))],
+                    timeout: 25)
+                else { return }
+                let older = Self.historyItems(from: result, page: offset)
+                let known = Set(items.map(\.id))
+                let fresh = older.filter { !known.contains($0.id) }
+                items.insert(contentsOf: fresh, at: 0)
+                updatePaging(result)
+                guard let next = olderOffset, hasOlderHistory else { return }
+                if !fresh.isEmpty { return }
+                offset = next  // Only tool rows on that page: keep going.
+            }
+        }
+    }
+
+    private func updatePaging(_ result: JSON) {
+        let next = result["nextOffset"]?.int.map(Int.init)
+        hasOlderHistory = result["hasMore"]?.bool == true && next != nil
+        olderOffset = next
+    }
+
+    /// Displayable user/assistant messages from a chat.history page.
+    nonisolated static func historyItems(from result: JSON, page: Int) -> [ChatItem] {
         var restored: [ChatItem] = []
         for (index, message) in (result["messages"]?.array ?? []).enumerated() {
             let role = message["role"]?.string
@@ -144,7 +187,7 @@ final class AgentSession {
             guard !text.isEmpty || !attachments.isEmpty else { continue }
             if role == "user" { text = MessageText.stripInstruction(text) }
             let meta = message["__openclaw"]
-            let id = meta?["id"]?.string ?? message["id"]?.string ?? message["messageId"]?.string ?? "h\(index)"
+            let id = meta?["id"]?.string ?? message["id"]?.string ?? message["messageId"]?.string ?? "h\(page)-\(index)"
             var item = ChatItem(id: id, role: role == "user" ? .user : .assistant, text: text, images: attachments)
             item.runId = meta?["runId"]?.string
             if let ts = message["timestamp"]?.double ?? message["ts"]?.double {
@@ -152,6 +195,12 @@ final class AgentSession {
             }
             restored.append(item)
         }
+        return restored
+    }
+
+    private func applyHistory(_ result: JSON) {
+        let restored = Self.historyItems(from: result, page: 0)
+        updatePaging(result)
         // Keep a locally-sent message that history doesn't contain yet.
         let pendingLocal = items.filter { $0.isStreaming || ($0.role == .user && $0.runId != nil && activeRunId == $0.runId) }
         items = restored + pendingLocal.filter { local in !restored.contains { $0.text == local.text && $0.role == local.role } }

@@ -177,6 +177,39 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_HISTORY_TEST"] != nil {
+            // Pages back through a long transcript, first via the model, then via the real UI.
+            Task {
+                while !model.session.historyLoaded { try? await Task.sleep(for: .milliseconds(200)) }
+                let s = model.session
+                print("FIRST PAGE items=\(s.items.count) first=\(s.items.first?.text ?? "-") hasOlder=\(s.hasOlderHistory)")
+                // UI path: host the chat, scroll to the top, let it auto-load.
+                let panel = NotchPanel()
+                panel.setFrame(NSRect(x: 0, y: 0, width: 560, height: 360), display: false)
+                panel.alphaValue = 0
+                panel.contentView = NSHostingView(rootView: ConversationView(app: model, maxHeight: 320)
+                    .frame(width: 540).background(.black).environment(\.colorScheme, .dark))
+                panel.orderFrontRegardless()
+                try? await Task.sleep(for: .seconds(1))
+                @MainActor func find(_ view: NSView) -> NSScrollView? {
+                    if let s = view as? NSScrollView { return s }
+                    for sub in view.subviews { if let s = find(sub) { return s } }
+                    return nil
+                }
+                guard let scroll = find(panel.contentView!) else { print("NO SCROLLVIEW"); exit(1) }
+                for round in 1...4 {
+                    let firstBefore = s.items.first?.text ?? "-"
+                    scroll.contentView.scroll(to: .zero)
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    try? await Task.sleep(for: .seconds(1.5))
+                    print("SCROLL-TOP \(round): items=\(s.items.count) first=\(s.items.first?.text ?? "-") hasOlder=\(s.hasOlderHistory) offsetY=\(Int(scroll.contentView.bounds.origin.y)) (was first=\(firstBefore))")
+                    if !s.hasOlderHistory { break }
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_TEST"] != nil {
             // Hosts the chat in a real window and drives it with scroll-wheel events.
             Task {

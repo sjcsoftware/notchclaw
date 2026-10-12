@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.6
+- Fix: you can scroll all the way back through a conversation. NotchClaw used to load only the last 40 transcript rows, and tool calls and results count as rows, so tool-heavy chats showed just a handful of messages. It now loads 150 rows up front and automatically fetches earlier pages when you reach the top (keeping your place), skipping past pages that contain only tool activity. An "Earlier messages" control at the top also loads more on click.
+
 ## 0.6.5
 - Fix: scrolling in the chat. The panel no longer re-applies its click-through flag on every pointer update (which could cut trackpad scroll gestures off), and scrolls over the open notch that macOS delivers elsewhere are applied to the chat.
 - A slim, trackless scrollbar that blends into the notch (thin translucent capsule; brightens on hover; draggable) replaces the hidden one.
