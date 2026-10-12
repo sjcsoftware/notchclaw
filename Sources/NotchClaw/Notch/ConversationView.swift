@@ -5,6 +5,11 @@ struct ConversationView: View {
     let app: AppModel
     let maxHeight: CGFloat
     @State private var contentHeight: CGFloat = 0
+    /// Height of the visible scroll area and where the bottom of the transcript sits in it.
+    @State private var viewportHeight: CGFloat = 0
+    @State private var bottomEdge: CGFloat = 0
+    /// Whether the newest message is in view (drives sticky auto-scroll and the jump button).
+    private var isAtBottom: Bool { viewportHeight == 0 || bottomEdge <= viewportHeight + 24 }
     @Environment(\.notchSnapshot) private var snapshot
 
     var body: some View {
@@ -35,23 +40,47 @@ struct ConversationView: View {
                     }
                     progressRows
                     Color.clear.frame(height: 1).id("bottom")
+                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("chatScroll")).minY } action: {
+                            bottomEdge = $0
+                        }
                 }
                 .padding(.vertical, 4)
+                .background(ScrollerHider())
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     contentHeight = height
                     app.notch.chatContentHeight = height
                 }
             }
-            .scrollIndicators(.never)  // no scrollbar, even with "Show scroll bars: Always"
+            .coordinateSpace(name: "chatScroll")
             .defaultScrollAnchor(.bottom)
             .frame(height: min(max(contentHeight, 44), maxHeight))
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
             .overlay(alignment: .bottom) { ToastView(message: session.toast) }
             .mask(fadeMask)
-            .onChange(of: session.items.last?.text) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .overlay(alignment: .bottom) {
+                if !isAtBottom {
+                    JumpToBottomButton {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isAtBottom)
+            // Sticky auto-scroll: follow new text only if the reader is already at the bottom.
+            .onChange(of: session.items.last?.text) { _, _ in
+                if isAtBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             .onChange(of: session.items.count) { _, _ in
+                // Your own new message always brings you down to it.
+                guard isAtBottom || session.items.last?.role == .user else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            .onChange(of: contentHeight) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: contentHeight) { _, _ in
+                if isAtBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             .onAppear {
                 // Start at the last known height so the first frame is already full size.
                 if contentHeight == 0 { contentHeight = app.notch.chatContentHeight }
@@ -447,5 +476,30 @@ enum ImageExport {
 
     private static func safe(_ name: String) -> String {
         String(name.filter { $0.isLetter || $0.isNumber || $0 == "-" }.prefix(40))
+    }
+}
+
+/// Floating "jump to latest" control shown when the newest message is out of view.
+private struct JumpToBottomButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color(white: hovering ? 0.26 : 0.18)))
+                .overlay(Circle().strokeBorder(.white.opacity(0.16), lineWidth: 0.75))
+                .shadow(color: .black.opacity(0.6), radius: 8, y: 2)
+                .contentShape(Circle())
+                .scaleEffect(hovering ? 1.06 : 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help("Jump to the latest message")
+        .accessibilityLabel("Jump to latest message")
     }
 }

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.4
+- Fix: scrolling works again in the chat. 0.6.3 hid the scrollbar with `.scrollIndicators(.never)`, which on macOS removes the scroller and with it wheel/trackpad scrolling; the scrollbar is now hidden with an invisible overlay scroller instead.
+- A **↓ button** appears at the bottom of the chat whenever you've scrolled up; click it to jump to the latest message.
+- Auto-scroll is sticky: new reply text only pulls you down if you're already at the bottom, so you can read earlier messages while the agent is replying.
+
 ## 0.6.3
 - Removed the scrollbar from the chat (and from wide code blocks and tables), including when macOS is set to always show scroll bars.
 

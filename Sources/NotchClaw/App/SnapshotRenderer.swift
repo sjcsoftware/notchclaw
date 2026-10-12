@@ -177,6 +177,53 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_TEST"] != nil {
+            // Hosts the chat in a real window and drives it with scroll-wheel events.
+            Task {
+                model.session.items = (0..<30).map { i in
+                    ChatItem(id: "\(i)", role: i.isMultiple(of: 2) ? .user : .assistant,
+                             text: "Message \(i): " + String(repeating: "lorem ipsum ", count: 12))
+                }
+                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 560, height: 360),
+                                      styleMask: [.borderless], backing: .buffered, defer: false)
+                window.contentView = NSHostingView(rootView: ConversationView(app: model, maxHeight: 320)
+                    .frame(width: 540).background(.black).environment(\.colorScheme, .dark))
+                window.orderFrontRegardless()
+                try? await Task.sleep(for: .seconds(1))
+                func find(_ view: NSView) -> NSScrollView? {
+                    if let s = view as? NSScrollView { return s }
+                    for sub in view.subviews { if let s = find(sub) { return s } }
+                    return nil
+                }
+                guard let scroll = find(window.contentView!) else { print("NO SCROLLVIEW"); exit(1) }
+                print("SCROLLER style=\(scroll.scrollerStyle == .overlay ? "overlay" : "legacy") vertical=\(scroll.verticalScroller.map { String(describing: type(of: $0)) } ?? "none") hasVertical=\(scroll.hasVerticalScroller)")
+                let before = scroll.contentView.bounds.origin.y
+                // Trackpad-like gesture: continuous pixel deltas with began/changed/ended phases.
+                let phases: [Int64] = [1, 2, 2, 2, 2, 2, 4]
+                for phase in phases {
+                    let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                     wheel1: phase == 4 ? 0 : 40, wheel2: 0, wheel3: 0)!
+                    cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                    cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+                    if let event = NSEvent(cgEvent: cg) { scroll.scrollWheel(with: event) }
+                    try? await Task.sleep(for: .milliseconds(30))
+                }
+                // Programmatic scroll to the top (like a user reading history).
+                scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                scroll.reflectScrolledClipView(scroll.contentView)
+                try? await Task.sleep(for: .milliseconds(800))
+                let after = scroll.contentView.bounds.origin.y
+                print("SCROLL offset before=\(Int(before)) after=\(Int(after)) moved=\(abs(after - before) > 1)")
+                if let dir = ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_PNG"],
+                   let rep = window.contentView!.bitmapImageRepForCachingDisplay(in: window.contentView!.bounds) {
+                    window.contentView!.cacheDisplay(in: window.contentView!.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir))
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["NOTCHCLAW_PROGRESS_TEST"] != nil {
             // Samples the live progress while the mock gateway narrates a run.
             Task {
