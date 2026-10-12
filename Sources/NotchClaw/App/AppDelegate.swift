@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.openSettings = { [weak self] in self?.showSettings() }
         notchController = NotchController(app: model)
         model.start()
+        #if DEBUG
+        DebugHooks.install(model)
+        #endif
         updateStatusItem()
         observeMenuBarSetting()
         if GatewayClient.normalizedURL(model.settings.gatewayURL) == nil || isFirstLaunch {
