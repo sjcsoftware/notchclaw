@@ -8,12 +8,12 @@ struct ChatView: View {
         let notch = app.notch
         let maxSize = notch.maxExpandedSize(settings: app.settings)
         let width = wantsWide ? maxSize.width : min(NotchLayout.baseExpandedWidth, maxSize.width)
-        let chrome: CGFloat = notch.geometry.notchHeight + 96
+        let chrome: CGFloat = NotchLayout.headerTopPadding + 26 + 96
         let conversationMax = max(90, maxSize.height - chrome - bannerAllowance)
 
         VStack(spacing: 10) {
-            ChatTopBar(app: app)
-                .frame(height: notch.geometry.notchHeight)
+            NotchHeader(app: app, showsBack: true)
+                .padding(.top, NotchLayout.headerTopPadding)
             ConnectionBanner(app: app)
             ForEach(app.session.approvals) { approval in
                 ApprovalCard(approval: approval) { decision in
@@ -49,72 +49,92 @@ struct ChatView: View {
     }
 }
 
-// MARK: - Top bar
+// MARK: - Header
 
-private struct ChatTopBar: View {
+/// Shared header: `Name  model ··· (notch) ···  n%  ▬▬▬`.
+struct NotchHeader: View {
     let app: AppModel
+    var showsBack = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 6) {
+        HStack(spacing: 8) {
+            if showsBack {
                 Button {
                     app.notch.page = .home
                 } label: {
                     Image(systemName: "chevron.left")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(.white.opacity(0.08)))
+                        .contentShape(Circle())
                 }
-                .buttonStyle(IconButtonStyle())
+                .buttonStyle(.plain)
                 .help("Back to \(app.settings.resolvedName)")
                 .accessibilityLabel("Back")
-                AgentAvatar(
-                    emoji: app.settings.resolvedEmoji, size: 13,
-                    thinking: app.session.activity.isBusy, dimmed: !app.gateway.state.isConnected)
-                AgentStatusLine(app: app)
             }
-            Spacer(minLength: app.notch.geometry.notchWidth + 12)
+            Text(app.settings.resolvedName)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white)
+                .lineLimit(1)
+                .layoutPriority(1)
+            ModelTag(app: app)
+            Spacer(minLength: app.notch.geometry.notchWidth + 16)
             UsageCluster(app: app)
         }
+        .frame(height: 26)
     }
 }
 
-/// Name plus a live status line (thinking / replying / model / connection).
-struct AgentStatusLine: View {
+/// Connection dot + current model (or connection/run state). Click to switch models.
+struct ModelTag: View {
     let app: AppModel
+    @State private var hovering = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text(app.settings.resolvedName)
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(.white)
+        Button {
+            ModelMenus.showModels(app)
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(dotColor)
+                    .frame(width: 6, height: 6)
+                    .shadow(color: dotColor.opacity(0.8), radius: 3)
+                Group {
+                    if case .thinking = app.session.activity {
+                        ShimmerText(text: label, size: 11)
+                    } else if app.session.activity == .streaming {
+                        ShimmerText(text: label, size: 11)
+                    } else {
+                        Text(label)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white.opacity(hovering ? 0.85 : 0.6))
+                    }
+                }
                 .lineLimit(1)
-            statusLine
-        }
-    }
-
-    @ViewBuilder
-    private var statusLine: some View {
-        switch app.session.activity {
-        case .thinking(let phase):
-            ShimmerText(text: phase ?? "Thinking…", size: 10.5)
-        case .streaming:
-            ShimmerText(text: "Replying…", size: 10.5)
-        case .compacting:
-            ShimmerText(text: "Compacting…", size: 10.5)
-        case .idle:
-            HStack(spacing: 4) {
-                Circle().fill(statusColor).frame(width: 5, height: 5)
-                Text(statusText)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.white.opacity(0.5))
-                    .lineLimit(1)
+                .truncationMode(.middle)
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3.5)
+            .background(Capsule().fill(.white.opacity(hovering ? 0.12 : 0.06)))
+            .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .help("Model — click to switch")
+        .accessibilityLabel("Model: \(label)")
     }
 
-    private var statusText: String {
+    private var label: String {
         switch app.gateway.state {
         case .connected:
-            if let model = app.session.sessionSettings.modelRef { return AgentSession.shortModelName(model) }
-            return "Online"
+            switch app.session.activity {
+            case .thinking(let phase): return phase ?? "Thinking…"
+            case .streaming: return "Replying…"
+            case .compacting: return "Compacting…"
+            case .idle: return app.session.sessionSettings.modelRef.map(AgentSession.shortModelName) ?? "Default model"
+            }
         case .connecting: return "Connecting…"
         case .offline: return "Offline"
         case .pairingRequired: return "Awaiting approval"
@@ -123,12 +143,50 @@ struct AgentStatusLine: View {
         }
     }
 
-    private var statusColor: Color {
+    private var dotColor: Color {
         switch app.gateway.state {
-        case .connected: return .green
+        case .connected: return Color(red: 0.3, green: 0.9, blue: 0.55)
         case .connecting, .pairingRequired: return .orange
-        default: return .red
+        case .idle: return .gray
+        default: return Color(red: 1, green: 0.4, blue: 0.4)
         }
+    }
+}
+
+/// Native menus for model and effort selection, shared by the header and home controls.
+@MainActor
+enum ModelMenus {
+    static func showModels(_ app: AppModel) {
+        let session = app.session
+        let current = session.sessionSettings.modelRef
+        var entries: [PopupMenu.Entry] = [.item("Default model", checked: current == nil) { session.setModel(nil) }]
+        let byProvider = Dictionary(grouping: session.models, by: \.provider)
+        for provider in byProvider.keys.sorted() {
+            entries.append(.separator)
+            entries.append(.header(provider))
+            for model in byProvider[provider] ?? [] {
+                entries.append(.item(model.name, checked: model.id == current) { session.setModel(model.id) })
+            }
+        }
+        if session.models.isEmpty {
+            entries.append(.item(app.gateway.state.isConnected ? "Loading models…" : "Connect to choose a model",
+                                 enabled: false) {})
+            session.loadModels()
+        }
+        PopupMenu.show(entries)
+    }
+
+    static func showEffort(_ app: AppModel) {
+        let session = app.session
+        let settings = session.sessionSettings
+        var entries: [PopupMenu.Entry] = [
+            .item("Default effort", checked: settings.thinkingLevel == nil) { session.setThinking(nil) },
+            .separator,
+        ]
+        for level in settings.thinkingOptions {
+            entries.append(.item(level.capitalized, checked: level == settings.thinkingLevel) { session.setThinking(level) })
+        }
+        PopupMenu.show(entries)
     }
 }
 
@@ -155,29 +213,32 @@ struct UsageCluster: View {
                 label(usage: usage)
             }
             .buttonStyle(.plain)
-            .help("Codex subscription usage — click to choose the window")
         }
     }
 
     private func label(usage: UsageInfo) -> some View {
         let window = usage.bestWindow(for: app.settings.usageWindow)
-        return VStack(alignment: .trailing, spacing: 3) {
-            HStack(spacing: 5) {
-                Text(window?.label ?? app.settings.usageWindow.shortTitle)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.55))
-                Text("\(Int(window?.usedPercent ?? 0))%")
-                    .font(.system(size: 11, weight: .semibold).monospacedDigit())
-                    .foregroundStyle(.white.opacity(0.9))
-                    .contentTransition(.numericText())
-            }
-            UsageBar(percent: window?.usedPercent ?? 0, width: 64, height: 4)
-            if let reset = window?.resetAt, reset > Date() {
-                Text("resets \(reset, style: .relative)")
-                    .font(.system(size: 8.5))
-                    .foregroundStyle(.white.opacity(0.4))
-            }
+        let percent = window?.usedPercent ?? 0
+        return HStack(spacing: 7) {
+            Text("\(Int(percent))%")
+                .font(.system(size: 11.5, weight: .semibold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.9))
+                .contentTransition(.numericText(value: percent))
+            UsageBar(percent: percent, width: 58, height: 5)
         }
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+        .help(helpText(usage: usage, window: window))
+        .animation(.snappy, value: percent)
+    }
+
+    private func helpText(usage: UsageInfo, window: UsageWindowInfo?) -> String {
+        guard let window else { return "\(usage.providerName) usage" }
+        var text = "\(usage.providerName) · \(window.label) window · \(Int(window.usedPercent))% used"
+        if let reset = window.resetAt, reset > Date() {
+            text += " · resets \(reset.formatted(.relative(presentation: .named)))"
+        }
+        return text + "\nClick to choose 5h / daily / weekly"
     }
 }
 
