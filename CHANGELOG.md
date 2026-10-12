@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.3
+- Removed the scrollbar from the chat (and from wide code blocks and tables), including when macOS is set to always show scroll bars.
+
 ## 0.6.2
 - **Live progress while the agent works.** Instead of sitting on "Waking the model", NotchClaw shows what the agent is doing right now: tool steps as they start and finish (with spinners and checkmarks), the agent's own commentary ("I'll check the logs first…"), its plan, and elapsed time. It's a card in the chat, a one-line caption under the agent on the home screen, and a running-tool line under a streaming reply. NotchClaw now subscribes to OpenClaw's tool-event stream to get this.
 

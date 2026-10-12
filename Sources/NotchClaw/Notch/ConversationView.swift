@@ -42,7 +42,7 @@ struct ConversationView: View {
                     app.notch.chatContentHeight = height
                 }
             }
-            .scrollIndicators(.automatic)
+            .scrollIndicators(.never)  // no scrollbar, even with "Show scroll bars: Always"
             .defaultScrollAnchor(.bottom)
             .frame(height: min(max(contentHeight, 44), maxHeight))
             .overlay(alignment: .bottom) { ToastView(message: session.toast) }
