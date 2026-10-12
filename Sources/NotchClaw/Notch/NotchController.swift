@@ -91,6 +91,11 @@ final class NotchController {
             MainActor.assumeIsolated { self?.pointerMoved() }
             return event
         }) { monitors.append(local) }
+        // Safety net: if a scroll over the open notch is delivered to another app, apply it to
+        // the scroll view under the pointer ourselves. (Events we receive normally never get here.)
+        if let scrolls = NSEvent.addGlobalMonitorForEvents(matching: .scrollWheel, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.forwardScroll(event) }
+        }) { monitors.append(scrolls) }
         // Clicks in other apps dismiss the expanded notch.
         if let clicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown], handler: { [weak self] _ in
             MainActor.assumeIsolated { self?.clickedOutside() }
@@ -151,7 +156,9 @@ final class NotchController {
     private func pointerMoved() {
         let location = NSEvent.mouseLocation
         let inside = Self.containsInclusive(interactiveRect(), location) || (notch.isExpanded && notch.viewHovering)
-        panel.ignoresMouseEvents = !inside
+        // Only touch the flag on change: re-setting it resets the window's event routing,
+        // which can cut a trackpad scroll gesture off mid-stream.
+        if panel.ignoresMouseEvents == inside { panel.ignoresMouseEvents = !inside }
         guard inside != notch.isHovering else { return }
         notch.isHovering = inside
         inside ? pointerEntered() : pointerExited()
@@ -175,6 +182,31 @@ final class NotchController {
         hoverTask?.cancel()
         guard notch.isExpanded else { return }
         scheduleCollapse(after: 0.5)
+    }
+
+    private func forwardScroll(_ event: NSEvent) {
+        let location = NSEvent.mouseLocation
+        guard notch.isExpanded, Self.containsInclusive(interactiveRect(), location),
+              let content = panel.contentView
+        else { return }
+        if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
+        let point = content.convert(panel.convertPoint(fromScreen: location), from: nil)
+        var view = content.hitTest(point)
+        // Find the nearest scroll view that can actually scroll vertically.
+        while let current = view {
+            if let scroll = current as? NSScrollView ?? current.enclosingScrollView,
+               let document = scroll.documentView,
+               document.frame.height > scroll.contentView.bounds.height + 1 {
+                let delta = event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.scrollingDeltaY * 12
+                let maxY = document.frame.height - scroll.contentView.bounds.height
+                var origin = scroll.contentView.bounds.origin
+                origin.y = (document.isFlipped ? origin.y - delta : origin.y + delta).clamped(to: 0...maxY)
+                scroll.contentView.scroll(to: origin)
+                scroll.reflectScrolledClipView(scroll.contentView)
+                return
+            }
+            view = current.enclosingScrollView?.superview
+        }
     }
 
     private func clickedOutside() {

@@ -77,6 +77,13 @@ wss.on('connection', (ws) => {
         setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: '## Hi', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi' }] } }), 600 + lag);
         setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: ' there\n\n- one\n- two' }), 900 + lag);
         setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'final', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi there\n\n- one\n- two' }, { type: 'image', artifactId: 'art_1', mimeType: 'image/png', width: 1, height: 1 }] } }), 1200 + lag);
+        if (process.env.MOCK_IMAGE_LATE) {
+          // Like a real codex imagegen run: the live final carries only the caption, and the
+          // image is committed to the transcript afterwards under an internal run id.
+          setTimeout(() => event('session.message', { sessionKey: sk, messageId: 'm-img', message: {
+            role: 'assistant', __openclaw: { runId: 'internal-run-1', id: 'm-img' },
+            content: [{ type: 'text', text: '- two' }, { type: 'image', artifactId: 'art_late', mimeType: 'image/png', width: 1, height: 1 }] } }), 2500 + lag);
+        }
         if (process.env.MOCK_REPLAY) {
           // Things a real gateway can deliver after a reply: a repeated terminal event,
           // the same reply committed under another run id, and a silent run.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.6.5
+- Fix: scrolling in the chat. The panel no longer re-applies its click-through flag on every pointer update (which could cut trackpad scroll gestures off), and scrolls over the open notch that macOS delivers elsewhere are applied to the chat.
+- A slim, trackless scrollbar that blends into the notch (thin translucent capsule; brightens on hover; draggable) replaces the hidden one.
+- Fix: generated images now appear on live replies. Images committed to the transcript after the reply (under an internal run id) are attached as they arrive via `session.message`, matched by run, caption, or latest reply, with a short transcript re-check as a backstop.
+
 ## 0.6.4
 - Fix: scrolling works again in the chat. 0.6.3 hid the scrollbar with `.scrollIndicators(.never)`, which on macOS removes the scroller and with it wheel/trackpad scrolling; the scrollbar is now hidden with an invisible overlay scroller instead.
 - A **↓ button** appears at the bottom of the chat whenever you've scrolled up; click it to jump to the latest message.

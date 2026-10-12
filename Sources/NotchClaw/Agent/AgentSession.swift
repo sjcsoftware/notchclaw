@@ -34,6 +34,7 @@ final class AgentSession {
     @ObservationIgnored private var finalizedRuns: Set<String> = []
     /// What the user last had on screen per run, to tell genuinely new replies from repeats.
     @ObservationIgnored private var seenContent: [String: String] = [:]
+    @ObservationIgnored private var reconcileTask: Task<Void, Never>?
     @ObservationIgnored private var usageTimer: Timer?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var usageRetries = 0
@@ -452,6 +453,13 @@ final class AgentSession {
             handleChat(payload)
         case "agent":
             handleAgent(payload)
+        case "session.message":
+            // A message was committed to the transcript; generated images arrive this way.
+            let key = payload["sessionKey"]?.string ?? payload["key"]?.string ?? payload["session"]?["key"]?.string
+            guard Self.matches(key, sessionKey), let message = payload["message"],
+                  message["role"]?.string == "assistant"
+            else { return }
+            attachImages(from: message)
         case "exec.approval.requested", "plugin.approval.requested":
             handleApprovalRequested(payload)
         case "exec.approval.resolved", "plugin.approval.resolved":
@@ -724,33 +732,51 @@ final class AgentSession {
         return NSImage(data: data)
     }
 
-    /// Live terminal events can omit attachments (the image is committed with the transcript),
-    /// so pull them from the latest history rows and attach them to the matching reply.
+    /// Live terminal events can omit attachments: the image is committed to the transcript
+    /// separately, sometimes after the run ends. Check the transcript a few times.
     func reconcileAttachments() {
-        Task {
-            try? await Task.sleep(for: .milliseconds(600))
-            guard let result = try? await gateway.request(
-                "chat.history", ["sessionKey": .string(sessionKey), "limit": 8], timeout: 20)
-            else { return }
-            for message in result["messages"]?.array ?? [] where message["role"]?.string == "assistant" {
-                let found = MessageText.images(message)
-                guard !found.isEmpty else { continue }
-                let runId = message["__openclaw"]?["runId"]?.string
-                let text = MessageText.extract(message)?.trimmed
-                let index = items.lastIndex { item in
-                    guard item.role == .assistant else { return false }
-                    if let runId, item.runId == runId { return true }
-                    return text != nil && item.text.trimmed == text
+        reconcileTask?.cancel()
+        reconcileTask = Task {
+            for delay in [0.6, 2.0, 4.0, 8.0] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                guard let result = try? await gateway.request(
+                    "chat.history", ["sessionKey": .string(sessionKey), "limit": 8], timeout: 20)
+                else { continue }
+                var attachedAny = false
+                for message in result["messages"]?.array ?? [] where message["role"]?.string == "assistant" {
+                    if attachImages(from: message) { attachedAny = true }
                 }
-                if let index {
-                    items[index].images = Self.uniqueImages(items[index].images + found)
-                } else if runId != nil {
-                    // An image-only completion we never saw live (e.g. after reconnecting).
-                    items.append(ChatItem(id: message["__openclaw"]?["id"]?.string ?? UUID().uuidString,
-                                          role: .assistant, text: text ?? "", runId: runId, images: found))
-                }
+                // Once the latest reply has its images, stop polling.
+                if attachedAny || items.last(where: { $0.role == .assistant })?.images.isEmpty == false { return }
             }
         }
+    }
+
+    /// Attaches a committed assistant message's images to the reply it belongs to.
+    /// Returns true if it added images that weren't shown yet.
+    @discardableResult
+    func attachImages(from message: JSON) -> Bool {
+        let found = MessageText.images(message)
+        guard !found.isEmpty else { return false }
+        // Already showing all of them?
+        let shown = Set(items.flatMap(\.images).map(\.id))
+        guard !found.allSatisfy({ shown.contains($0.id) }) else { return false }
+
+        let runId = message["__openclaw"]?["runId"]?.string
+        let text = MessageText.extract(message)?.trimmed ?? ""
+        // 1) same run, 2) the live reply that contains this caption, 3) the latest reply.
+        let index = items.lastIndex(where: { $0.role == .assistant && runId != nil && $0.runId == runId })
+            ?? items.lastIndex(where: { $0.role == .assistant && !text.isEmpty && $0.text.trimmed.contains(text) })
+            ?? (items.last?.role == .assistant ? items.indices.last : nil)
+        if let index {
+            items[index].images = Self.uniqueImages(items[index].images + found)
+        } else {
+            items.append(ChatItem(id: message["__openclaw"]?["id"]?.string ?? UUID().uuidString,
+                                  role: .assistant, text: text, runId: runId, images: found))
+        }
+        Log.info("Attached \(found.count) image(s) from the transcript")
+        return true
     }
 
     private func handleApprovalRequested(_ p: JSON) {

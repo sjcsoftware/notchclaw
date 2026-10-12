@@ -184,13 +184,31 @@ enum DebugHooks {
                     ChatItem(id: "\(i)", role: i.isMultiple(of: 2) ? .user : .assistant,
                              text: "Message \(i): " + String(repeating: "lorem ipsum ", count: 12))
                 }
-                let window = NSWindow(contentRect: NSRect(x: -4000, y: -4000, width: 560, height: 360),
+                // At the screen origin so event coordinates equal window coordinates; invisible.
+                let window: NSWindow
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_PANEL"] != nil {
+                    let panel = NotchPanel()
+                    panel.setFrame(NSRect(x: 0, y: 0, width: 560, height: 360), display: false)
+                    panel.ignoresMouseEvents = false
+                    window = panel
+                } else {
+                    window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
                                       styleMask: [.borderless], backing: .buffered, defer: false)
-                window.contentView = NSHostingView(rootView: ConversationView(app: model, maxHeight: 320)
-                    .frame(width: 540).background(.black).environment(\.colorScheme, .dark))
+                }
+                window.alphaValue = 0
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_PLAIN"] != nil {
+                    window.contentView = NSHostingView(rootView: ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ForEach(model.session.items) { Text($0.text).frame(maxWidth: .infinity, alignment: .leading) }
+                        }
+                    }.frame(width: 540, height: 320).background(.black))
+                } else {
+                    window.contentView = NSHostingView(rootView: ConversationView(app: model, maxHeight: 320)
+                        .frame(width: 540).background(.black).environment(\.colorScheme, .dark))
+                }
                 window.orderFrontRegardless()
                 try? await Task.sleep(for: .seconds(1))
-                func find(_ view: NSView) -> NSScrollView? {
+                @MainActor func find(_ view: NSView) -> NSScrollView? {
                     if let s = view as? NSScrollView { return s }
                     for sub in view.subviews { if let s = find(sub) { return s } }
                     return nil
@@ -202,16 +220,25 @@ enum DebugHooks {
                 let phases: [Int64] = [1, 2, 2, 2, 2, 2, 4]
                 for phase in phases {
                     let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
-                                     wheel1: phase == 4 ? 0 : 40, wheel2: 0, wheel3: 0)!
+                                     wheel1: phase == 4 ? 0 : (before < 1 ? -40 : 40), wheel2: 0, wheel3: 0)!
                     cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
                     cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
-                    if let event = NSEvent(cgEvent: cg) { scroll.scrollWheel(with: event) }
+                    let screenHeight = NSScreen.screens.first?.frame.height ?? 1000
+                    cg.location = CGPoint(x: 280, y: screenHeight - 180)  // window centre, CG coordinates
+                    if let event = NSEvent(cgEvent: cg) { window.sendEvent(event) }
                     try? await Task.sleep(for: .milliseconds(30))
                 }
-                // Programmatic scroll to the top (like a user reading history).
-                scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
-                scroll.reflectScrolledClipView(scroll.contentView)
-                try? await Task.sleep(for: .milliseconds(800))
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_WHEEL_ONLY"] == nil {
+                    // Programmatic scroll to the top (like a user reading history).
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_NOWAIT"] == nil {
+                    try? await Task.sleep(for: .milliseconds(800))
+                } else {
+                    scroll.flashScrollers()
+                    try? await Task.sleep(for: .milliseconds(60))
+                }
                 let after = scroll.contentView.bounds.origin.y
                 print("SCROLL offset before=\(Int(before)) after=\(Int(after)) moved=\(abs(after - before) > 1)")
                 if let dir = ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_PNG"],
@@ -393,7 +420,8 @@ enum DebugHooks {
             while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
             try? await Task.sleep(for: .seconds(1))
             model.session.send(text)
-            try? await Task.sleep(for: .seconds(2.5))
+            let waitSeconds = Double(ProcessInfo.processInfo.environment["NOTCHCLAW_AUTOSEND_WAIT"] ?? "") ?? 2.5
+            try? await Task.sleep(for: .seconds(waitSeconds))
             for item in model.session.items { item.images.forEach(model.session.loadImage) }
             try? await Task.sleep(for: .seconds(1))
             let s = model.session
