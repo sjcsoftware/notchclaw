@@ -60,7 +60,7 @@ final class AppModel {
     // MARK: Push-to-talk
 
     /// The last thing the user said, shown in the speech bubble under the agent until it replies.
-    private(set) var spokenText: String?
+    internal(set) var spokenText: String?
     @ObservationIgnored private var expandedForVoice = false
     @ObservationIgnored private var bubbleTask: Task<Void, Never>?
 

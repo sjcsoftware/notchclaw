@@ -529,3 +529,13 @@ enum InstanceID {
 private final class PingFlag {
     var value = false
 }
+
+#if DEBUG
+extension GatewayClient {
+    /// Debug-only: pretend to be connected for screenshot rendering.
+    func simulateConnected(version: String) {
+        state = .connected
+        serverVersion = version
+    }
+}
+#endif
