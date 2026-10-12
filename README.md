@@ -5,11 +5,6 @@
 <h1 align="center">NotchClaw</h1>
 
 <p align="center">
-  <b>Talk to your <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agent from the MacBook notch.</b><br>
-  Hover to open, hold a key to speak, and watch replies stream in as rich Markdown, charts, and images.
-</p>
-
-<p align="center">
   <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-black?logo=apple">
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-black">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-5.10%2B-F05138?logo=swift&logoColor=white">
@@ -18,21 +13,19 @@
 </p>
 
 <p align="center">
+  <b>Talk to your <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agent from the MacBook notch.</b><br>
+  Hover to open, hold a key to speak, and watch replies stream in as rich Markdown, charts, and images.
+</p>
+
+<p align="center">
   <img src="docs/images/home.png" alt="NotchClaw's home screen open under the notch" width="820">
 </p>
 
+---
+
 ## Features
 
-- **Lives in the notch.** Minimized, it's just a black extension of the notch. Hover and it springs open, then folds away when you move on.
-- **Hold to talk.** Hold <kbd>⌥ Space</kbd> anywhere: the notch opens, the agent's emoji ripples with your voice, and your words are transcribed live in a speech bubble. Release to send.
-- **Voice controls.** Say "set effort to high", "switch model to sonnet", "compact the context", "new session", or "stop".
-- **Rich replies.** Answers render as Markdown with tables, code blocks (with copy), quotes, and task lists. Data shows up as **native charts**, and generated **images** appear inline.
-- **Neon glow.** When the agent replies or needs your approval while you're elsewhere, the notch glows with a Siri-style spectrum.
-- **Session controls at a glance.** Model, reasoning effort, compaction (with a context-usage ring), and new session all sit next to the agent.
-- **Codex usage meter.** If your agent uses a ChatGPT/Codex login, the header shows your 5-hour, daily, or weekly usage.
-- **Exec approvals.** Approve or deny shell commands the agent wants to run, right from the notch.
-- **Resilient.** It reconnects in under a second when Wi‑Fi returns or the Mac wakes, and shows a calm offline state in between.
-- **Native and small.** Swift, SwiftUI, and AppKit with zero third-party dependencies, at about 2 MB.
+### Hold to talk and control with your voice
 
 <table>
   <tr>
@@ -45,38 +38,55 @@
   </tr>
 </table>
 
+- Hold <kbd>⌥ Space</kbd> anywhere: the notch opens,  your words are transcribed live in a speech bubble. Release to send.
+
+- Say "set effort to high", "switch model to sonnet", "compact the context", "new session", or "stop".
+
+### Rich replies
+
 <p align="center">
   <img src="docs/images/chat.png" alt="Chat screen with a Markdown reply, a native line chart, and a table" width="820"><br>
   <sub>Replies land in the chat screen as Markdown, tables, and native charts.</sub>
 </p>
+
+### Sleek design
 
 <p align="center">
   <img src="docs/images/minimized-glow.png" alt="Minimized notch glowing after a reply" width="820"><br>
   <sub>Minimized, the notch glows when there's something new.</sub>
 </p>
 
+
+- If your agent uses a ChatGPT/Codex login, the header shows your 5-hour, daily, or weekly usage (Can be set in the settings).
+
+### Performance
+
+- It reconnects in under a second when Wi‑Fi returns or the Mac wakes, and shows a calm offline state in between.
+
+- Swift, SwiftUI, and AppKit with zero third-party dependencies, at about 2 MB.
+
+---
+
 ## Requirements
 
-- A Mac with Apple Silicon running **macOS 14 Sonoma or later**. Notch Macs get the full effect; on other displays NotchClaw sits at the top center of the screen.
-- A running **OpenClaw gateway** (protocol v4, OpenClaw 2026.8 or newer), either on this Mac or reachable over your LAN or tailnet.
+- Apple Silicon
+- MacOS 14 Sonoma or later
+- A running **OpenClaw gateway** (protocol v4, OpenClaw 2026.8 or newer)
 
 ## Install
 
 1. Download the latest `NotchClaw-x.y.z.dmg` from [**Releases**](https://github.com/sjcsoftware/notchclaw/releases).
 2. Open it and drag **NotchClaw** into **Applications**.
-3. Launch it. Release builds are ad-hoc signed rather than notarized, so on first launch either:
-   - right-click NotchClaw in Applications, choose **Open**, then **Open** again, **or**
-   - go to **System Settings › Privacy & Security** and click **Open Anyway**, **or**
-   - run `xattr -dr com.apple.quarantine /Applications/NotchClaw.app`.
+3. Launch it from applications.
 
 ### Build from source
 
-You only need the Xcode **Command Line Tools**; the full Xcode app isn't required.
+You need the Xcode **Command Line Tools**.
 
 ```bash
 git clone https://github.com/sjcsoftware/notchclaw.git
 cd notchclaw
-scripts/build.sh            # → dist/NotchClaw.app and dist/NotchClaw-<version>.dmg
+scripts/build.sh        # → dist/NotchClaw.app and dist/NotchClaw-<version>.dmg
 open dist/NotchClaw.app
 ```
 
@@ -84,23 +94,29 @@ open dist/NotchClaw.app
 
 NotchClaw opens **Settings** on first launch. You can reopen it any time with <kbd>⌘ ,</kbd>, from the gear on the notch, or from the menu bar icon.
 
-1. **Gateway URL.** For a gateway on this Mac, use `ws://127.0.0.1:18789`. For another machine, use something like `ws://192.168.1.20:18789` or `wss://claw.your-tailnet.ts.net`. `http(s)://` and bare `host:port` work too.
-2. **Token.** This is your gateway's shared secret: the `gateway.auth.token` you chose during `openclaw onboard`, stored in `~/.openclaw/openclaw.json`. `openclaw config get` redacts secrets, so read it from that file or from wherever you keep it.
-3. **Session.** Leave this as `main` to talk to your agent's main session, or enter any session key.
-4. Click **Save & Connect**.
+> The setup is the same as setting up any new machine on your OpenClaw gateway.
 
-**Remote gateways need a one-time approval.** NotchClaw signs in with its own device identity, so the gateway asks you to approve it. The notch shows the exact command; run it on the gateway host:
+1. **Gateway URL**
+2. **Token**
+3. **Session** - Leave this as `main` to talk to your agent's main session, or enter any session key.
+4. Click **Save & Connect**
 
-```bash
-openclaw devices list
-openclaw devices approve <requestId>
-```
+- **Remote gateways need a one-time approval**
 
-NotchClaw connects by itself once you approve it. Connections from the same machine (loopback) are approved automatically.
+  NotchClaw signs in with its own device identity, so the gateway asks you to approve it. The notch shows the exact command; run it on the gateway host:
 
-**Voice permissions.** The first time you hold the shortcut, macOS asks for **Microphone** and **Speech Recognition** access. Allow both, then hold the shortcut again.
+  ```bash
+  openclaw devices list
+  openclaw devices approve <requestId>
+  ```
 
-## Use
+  NotchClaw connects by itself once you approve it. Connections from the same machine (loopback) are approved automatically.
+
+- **Voice permissions**
+  
+  The first time you hold the shortcut, macOS asks for **Microphone** and **Speech Recognition** access. Allow both, then hold the shortcut again.
+
+## Use case
 
 | Do this | To |
 | --- | --- |
@@ -175,7 +191,7 @@ Sources/NotchClaw/
 ## Privacy and security
 
 - The gateway token and device key are stored in `~/Library/Application Support/NotchClaw/credentials.json` with `0600` permissions.
-- Speech is transcribed by Apple's Speech framework, on-device when the model is available. Audio is only captured while you hold the shortcut.
+- Speech is transcribed by **Apple's Speech framework**, on-device when the model is available. Audio is only captured while you hold the shortcut.
 - NotchClaw talks only to the gateway you configure. It has no analytics or telemetry.
 
 ## Development
