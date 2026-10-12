@@ -13,6 +13,7 @@ struct HomeView: View {
         VStack(spacing: 14) {
             NotchHeader(app: app)
                 .padding(.top, NotchLayout.headerTopPadding)
+                .padding(.horizontal, NotchLayout.headerInset)
 
             ConnectionBanner(app: app)
             ForEach(session.approvals) { approval in
@@ -62,8 +63,8 @@ struct HomeView: View {
             SpeechBubble(app: app)
                 .frame(minHeight: 30)
         }
-        .padding(.horizontal, 24)
-        .padding(.bottom, 16)
+        .padding(.horizontal, NotchLayout.contentInset)
+        .padding(.bottom, 18)
         .frame(width: NotchLayout.homeWidth)
         .overlay(alignment: .bottom) { ToastView(message: session.toast) }
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: app.voice.phase)
@@ -181,7 +182,6 @@ struct AgentStage: View {
                     .fill(RadialGradient(
                         colors: [NotchPalette.siri[1].opacity(hovering ? 0.32 : 0.12), .clear],
                         center: .center, startRadius: 4, endRadius: 54))
-                    .overlay(Circle().strokeBorder(.white.opacity(hovering ? 0.14 : 0.07), lineWidth: 0.75).padding(14))
                     .transition(.opacity)
             }
 
