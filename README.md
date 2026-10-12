@@ -62,7 +62,7 @@
 
 ## Install
 
-1. Download the latest `NotchClaw-x.y.z.dmg` from [**Releases**](https://github.com/chaseungjoon/notchclaw/releases).
+1. Download the latest `NotchClaw-x.y.z.dmg` from [**Releases**](https://github.com/sjcsoftware/notchclaw/releases).
 2. Open it and drag **NotchClaw** into **Applications**.
 3. Launch it. Release builds are ad-hoc signed rather than notarized, so on first launch either:
    - right-click NotchClaw in Applications, choose **Open**, then **Open** again, **or**
@@ -74,7 +74,7 @@
 You only need the Xcode **Command Line Tools**; the full Xcode app isn't required.
 
 ```bash
-git clone https://github.com/chaseungjoon/notchclaw.git
+git clone https://github.com/sjcsoftware/notchclaw.git
 cd notchclaw
 scripts/build.sh            # → dist/NotchClaw.app and dist/NotchClaw-<version>.dmg
 open dist/NotchClaw.app
