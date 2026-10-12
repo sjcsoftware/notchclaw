@@ -5,12 +5,18 @@ struct ConversationView: View {
     let app: AppModel
     let maxHeight: CGFloat
     @State private var contentHeight: CGFloat = 0
+    /// Height of the visible scroll area and where the bottom of the transcript sits in it.
+    @State private var viewportHeight: CGFloat = 0
+    @State private var bottomEdge: CGFloat = 0
+    /// Whether the newest message is in view (drives sticky auto-scroll and the jump button).
+    private var isAtBottom: Bool { viewportHeight == 0 || bottomEdge <= viewportHeight + 24 }
     @Environment(\.notchSnapshot) private var snapshot
 
     var body: some View {
         if snapshot {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(app.session.items) { MessageRow(item: $0, session: app.session) }
+                progressRows
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
@@ -25,6 +31,13 @@ struct ConversationView: View {
                 // A plain VStack: a lazy stack leaves freshly revealed rows blank when the
                 // scroll view grows to its measured height on appear.
                 VStack(alignment: .leading, spacing: 14) {
+                    if session.hasOlderHistory {
+                        EarlierMessagesRow(loading: session.isLoadingOlder) { loadOlder(proxy) }
+                            .onGeometryChange(for: Bool.self) { $0.frame(in: .named("chatScroll")).maxY > -80 } action: { nearTop in
+                                // Reaching the top loads earlier messages automatically.
+                                if nearTop, !isAtBottom || contentHeight <= viewportHeight { loadOlder(proxy) }
+                            }
+                    }
                     if session.items.isEmpty {
                         EmptyConversation(app: app)
                     }
@@ -32,29 +45,49 @@ struct ConversationView: View {
                         MessageRow(item: item, session: session)
                             .id(item.id)
                     }
-                    if showsPendingThinking {
-                        ThinkingRow(phase: phaseText)
-                            .id("thinking")
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
+                    progressRows
                     Color.clear.frame(height: 1).id("bottom")
+                        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named("chatScroll")).minY } action: {
+                            bottomEdge = $0
+                        }
                 }
                 .padding(.vertical, 4)
+                .background(ScrollerHider())
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height in
                     contentHeight = height
                     app.notch.chatContentHeight = height
                 }
             }
-            .scrollIndicators(.automatic)
+            .coordinateSpace(name: "chatScroll")
             .defaultScrollAnchor(.bottom)
             .frame(height: min(max(contentHeight, 44), maxHeight))
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { viewportHeight = $0 }
             .overlay(alignment: .bottom) { ToastView(message: session.toast) }
             .mask(fadeMask)
-            .onChange(of: session.items.last?.text) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .overlay(alignment: .bottom) {
+                if !isAtBottom {
+                    JumpToBottomButton {
+                        withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
+                            proxy.scrollTo("bottom", anchor: .bottom)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.8), value: isAtBottom)
+            // Sticky auto-scroll: follow new text only if the reader is already at the bottom.
+            .onChange(of: session.items.last?.text) { _, _ in
+                if isAtBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             .onChange(of: session.items.count) { _, _ in
+                // Your own new message always brings you down to it.
+                guard isAtBottom || session.items.last?.role == .user else { return }
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("bottom", anchor: .bottom) }
             }
-            .onChange(of: contentHeight) { _, _ in proxy.scrollTo("bottom", anchor: .bottom) }
+            .onChange(of: contentHeight) { _, _ in
+                if isAtBottom { proxy.scrollTo("bottom", anchor: .bottom) }
+            }
             .onAppear {
                 // Start at the last known height so the first frame is already full size.
                 if contentHeight == 0 { contentHeight = app.notch.chatContentHeight }
@@ -63,6 +96,36 @@ struct ConversationView: View {
             }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showsPendingThinking)
+    }
+
+    /// Loads older history and keeps the message you were looking at in place.
+    private func loadOlder(_ proxy: ScrollViewProxy) {
+        let session = app.session
+        guard session.hasOlderHistory, !session.isLoadingOlder else { return }
+        let anchor = session.items.first?.id
+        session.loadOlderHistory()
+        guard let anchor else { return }
+        Task { @MainActor in
+            // Wait for the prepend, then pin the previous first message to the top.
+            for _ in 0..<40 where session.isLoadingOlder { try? await Task.sleep(for: .milliseconds(50)) }
+            proxy.scrollTo(anchor, anchor: .top)
+        }
+    }
+
+    /// Live run progress: a full card before reply text arrives, then a one-line
+    /// "currently doing" row under the streaming reply whenever a tool is running.
+    @ViewBuilder
+    private var progressRows: some View {
+        let session = app.session
+        if showsPendingThinking {
+            RunProgressView(progress: session.progress)
+                .id("thinking")
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+        } else if session.activity == .streaming, session.progress.activeStep != nil {
+            RunProgressView(progress: session.progress, compact: true)
+                .id("thinking")
+                .transition(.opacity)
+        }
     }
 
     private var showsPendingThinking: Bool {
@@ -434,5 +497,55 @@ enum ImageExport {
 
     private static func safe(_ name: String) -> String {
         String(name.filter { $0.isLetter || $0.isNumber || $0 == "-" }.prefix(40))
+    }
+}
+
+/// Floating "jump to latest" control shown when the newest message is out of view.
+private struct JumpToBottomButton: View {
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.down")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(Circle().fill(Color(white: hovering ? 0.26 : 0.18)))
+                .overlay(Circle().strokeBorder(.white.opacity(0.16), lineWidth: 0.75))
+                .shadow(color: .black.opacity(0.6), radius: 8, y: 2)
+                .contentShape(Circle())
+                .scaleEffect(hovering ? 1.06 : 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .help("Jump to the latest message")
+        .accessibilityLabel("Jump to latest message")
+    }
+}
+
+/// Top-of-transcript row: loads earlier messages (automatically when reached, or on click).
+private struct EarlierMessagesRow: View {
+    let loading: Bool
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if loading {
+                ProgressView().controlSize(.mini)
+                Text("Loading earlier messages…")
+            } else {
+                Button(action: action) {
+                    Label("Earlier messages", systemImage: "arrow.up")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .font(.system(size: 11))
+        .foregroundStyle(.white.opacity(0.4))
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 2)
+        .accessibilityLabel(loading ? "Loading earlier messages" : "Load earlier messages")
     }
 }

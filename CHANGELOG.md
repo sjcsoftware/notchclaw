@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.6
+- Fix: you can scroll all the way back through a conversation. NotchClaw used to load only the last 40 transcript rows, and tool calls and results count as rows, so tool-heavy chats showed just a handful of messages. It now loads 150 rows up front and automatically fetches earlier pages when you reach the top (keeping your place), skipping past pages that contain only tool activity. An "Earlier messages" control at the top also loads more on click.
+
+## 0.6.5
+- Fix: scrolling in the chat. The panel no longer re-applies its click-through flag on every pointer update (which could cut trackpad scroll gestures off), and scrolls over the open notch that macOS delivers elsewhere are applied to the chat.
+- A slim, trackless scrollbar that blends into the notch (thin translucent capsule; brightens on hover; draggable) replaces the hidden one.
+- Fix: generated images now appear on live replies. Images committed to the transcript after the reply (under an internal run id) are attached as they arrive via `session.message`, matched by run, caption, or latest reply, with a short transcript re-check as a backstop.
+
+## 0.6.4
+- Fix: scrolling works again in the chat. 0.6.3 hid the scrollbar with `.scrollIndicators(.never)`, which on macOS removes the scroller and with it wheel/trackpad scrolling; the scrollbar is now hidden with an invisible overlay scroller instead.
+- A **↓ button** appears at the bottom of the chat whenever you've scrolled up; click it to jump to the latest message.
+- Auto-scroll is sticky: new reply text only pulls you down if you're already at the bottom, so you can read earlier messages while the agent is replying.
+
+## 0.6.3
+- Removed the scrollbar from the chat (and from wide code blocks and tables), including when macOS is set to always show scroll bars.
+
+## 0.6.2
+- **Live progress while the agent works.** Instead of sitting on "Waking the model", NotchClaw shows what the agent is doing right now: tool steps as they start and finish (with spinners and checkmarks), the agent's own commentary ("I'll check the logs first…"), its plan, and elapsed time. It's a card in the chat, a one-line caption under the agent on the home screen, and a running-tool line under a streaming reply. NotchClaw now subscribes to OpenClaw's tool-event stream to get this.
+
 ## 0.6.1
 - Fix: the minimized notch no longer glows when there's no new message. Repeated terminal events for a run, the same reply committed under a second run id, silent runs, and replies you already read now leave the notch dark (and no longer duplicate the reply in chat).
 - Fix: a streamed snapshot frame could repeat its last chunk of text.

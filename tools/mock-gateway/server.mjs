@@ -49,7 +49,23 @@ wss.on('connection', (ws) => {
       return res(f.id, true, { type: 'hello-ok', protocol: 4, server: { version: 'mock-2026.8', connId: 'c1' }, features: { methods: [], events: [] }, snapshot: {}, auth: { role: 'operator', scopes: p.scopes, deviceToken: 'devtok' }, policy: { maxPayload: 26214400, maxBufferedBytes: 52428800, tickIntervalMs: 15000 } });
     }
     switch (f.method) {
-      case 'chat.history': return res(f.id, true, { messages: [{ role: 'user', content: [{ type: 'text', text: '<notchclaw-format>x</notchclaw-format>\n\nold question' }] }, { role: 'assistant', content: [{ type: 'text', text: 'old **answer**' }] }], sessionInfo: { model: 'gpt-5.1-codex', modelProvider: 'openai-codex', thinkingLevel: 'medium', totalTokens: 1000, contextTokens: 200000 } });
+      case 'chat.history':
+        if (process.env.MOCK_LONG_HISTORY) {
+          // 80 tool-heavy turns: user, tool call, 2 tool results, answer (2 of 5 rows visible).
+          const rows = [];
+          for (let t = 1; t <= 80; t++) {
+            rows.push({ role: 'user', content: [{ type: 'text', text: `Question ${t}` }], __openclaw: { id: `u${t}` } });
+            rows.push({ role: 'assistant', content: [{ type: 'toolCall', name: 'exec', arguments: {} }], __openclaw: { id: `c${t}` } });
+            rows.push({ role: 'toolResult', content: [{ type: 'text', text: 'ok' }], __openclaw: { id: `r${t}a` } });
+            rows.push({ role: 'toolResult', content: [{ type: 'text', text: 'ok' }], __openclaw: { id: `r${t}b` } });
+            rows.push({ role: 'assistant', content: [{ type: 'text', text: `Answer ${t}` }], __openclaw: { id: `a${t}` } });
+          }
+          const limit = f.params.limit || 40, offset = f.params.offset || 0, total = rows.length;
+          const end = total - offset, start = Math.max(0, end - limit);
+          const hasMore = start > 0;
+          return res(f.id, true, { messages: rows.slice(start, end), hasMore, ...(hasMore ? { nextOffset: offset + (end - start) } : {}), totalMessages: total, sessionKey: f.params.sessionKey });
+        }
+        return res(f.id, true, { messages: [{ role: 'user', content: [{ type: 'text', text: '<notchclaw-format>x</notchclaw-format>\n\nold question' }] }, { role: 'assistant', content: [{ type: 'text', text: 'old **answer**' }] }], sessionInfo: { model: 'gpt-5.1-codex', modelProvider: 'openai-codex', thinkingLevel: 'medium', totalTokens: 1000, contextTokens: 200000 } });
       case 'sessions.describe': return res(f.id, true, { session: { key: 'agent:main:main', model: 'gpt-5.1-codex', modelProvider: 'openai-codex', thinkingLevel: 'medium' } });
       case 'models.list': return res(f.id, true, { models: [{ id: 'gpt-5.1-codex', name: 'GPT-5.1 Codex', provider: 'openai-codex' }, { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', provider: 'anthropic' }] });
       case 'usage.status': return res(f.id, true, { updatedAt: Date.now(), providers: [{ provider: 'openai', displayName: 'Codex', plan: 'plus', windows: [{ label: '5h', usedPercent: 37, resetAt: Date.now() + 3600e3 }, { label: 'Week', usedPercent: 64 }] }] });
@@ -58,10 +74,32 @@ wss.on('connection', (ws) => {
         res(f.id, true, { runId, status: 'started' });
         console.log('  message starts with instruction:', f.params.message.startsWith('<notchclaw-format>'));
         const sk = 'agent:main:main'; let rs = 0;
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'status', phase: 'starting_model' }), 200);
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: '## Hi', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi' }] } }), 600);
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: ' there\n\n- one\n- two' }), 900);
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'final', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi there\n\n- one\n- two' }, { type: 'image', artifactId: 'art_1', mimeType: 'image/png', width: 1, height: 1 }] } }), 1200);
+        // With MOCK_PROGRESS=1, narrate the run like a real agent before replying.
+        const lag = process.env.MOCK_PROGRESS ? 4000 : 0;
+        if (lag) {
+          const agent = (at, stream, data) => setTimeout(() => event('agent', { runId, sessionKey: sk, seq: at, stream, ts: Date.now(), data }), at);
+          agent(150, 'lifecycle', { phase: 'start' });
+          agent(400, 'item', { kind: 'preamble', title: 'Preamble', phase: 'update', itemId: 'p1', progressText: "I'll check the forecast and your calendar, then summarize." });
+          agent(600, 'plan', { phase: 'update', steps: [{ step: 'Look up the weather', status: 'in_progress' }, { step: 'Check tomorrow\'s calendar', status: 'pending' }, { step: 'Summarize', status: 'pending' }] });
+          agent(800, 'tool', { phase: 'start', name: 'web_search', toolCallId: 't1', args: { query: 'seoul weather tomorrow' } });
+          agent(850, 'item', { kind: 'tool', itemId: 'i1', toolCallId: 't1', phase: 'start', title: 'Searching the web for “seoul weather tomorrow”', name: 'web_search' });
+          agent(1800, 'tool', { phase: 'result', name: 'web_search', toolCallId: 't1' });
+          agent(1850, 'item', { kind: 'tool', itemId: 'i1', toolCallId: 't1', phase: 'end', title: 'Searched the web for “seoul weather tomorrow”', status: 'completed' });
+          agent(2000, 'plan', { phase: 'update', steps: [{ step: 'Look up the weather', status: 'completed' }, { step: 'Check tomorrow\'s calendar', status: 'in_progress' }, { step: 'Summarize', status: 'pending' }] });
+          agent(2100, 'tool', { phase: 'start', name: 'exec', toolCallId: 't2', args: { command: 'gcal list --tomorrow' } });
+          agent(3300, 'tool', { phase: 'result', name: 'exec', toolCallId: 't2' });
+        }
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'status', phase: 'starting_model' }), 100);
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: '## Hi', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi' }] } }), 600 + lag);
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: ' there\n\n- one\n- two' }), 900 + lag);
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'final', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi there\n\n- one\n- two' }, { type: 'image', artifactId: 'art_1', mimeType: 'image/png', width: 1, height: 1 }] } }), 1200 + lag);
+        if (process.env.MOCK_IMAGE_LATE) {
+          // Like a real codex imagegen run: the live final carries only the caption, and the
+          // image is committed to the transcript afterwards under an internal run id.
+          setTimeout(() => event('session.message', { sessionKey: sk, messageId: 'm-img', message: {
+            role: 'assistant', __openclaw: { runId: 'internal-run-1', id: 'm-img' },
+            content: [{ type: 'text', text: '- two' }, { type: 'image', artifactId: 'art_late', mimeType: 'image/png', width: 1, height: 1 }] } }), 2500 + lag);
+        }
         if (process.env.MOCK_REPLAY) {
           // Things a real gateway can deliver after a reply: a repeated terminal event,
           // the same reply committed under another run id, and a silent run.

@@ -177,6 +177,144 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_HISTORY_TEST"] != nil {
+            // Pages back through a long transcript, first via the model, then via the real UI.
+            Task {
+                while !model.session.historyLoaded { try? await Task.sleep(for: .milliseconds(200)) }
+                let s = model.session
+                print("FIRST PAGE items=\(s.items.count) first=\(s.items.first?.text ?? "-") hasOlder=\(s.hasOlderHistory)")
+                // UI path: host the chat, scroll to the top, let it auto-load.
+                let panel = NotchPanel()
+                panel.setFrame(NSRect(x: 0, y: 0, width: 560, height: 360), display: false)
+                panel.alphaValue = 0
+                panel.contentView = NSHostingView(rootView: ConversationView(app: model, maxHeight: 320)
+                    .frame(width: 540).background(.black).environment(\.colorScheme, .dark))
+                panel.orderFrontRegardless()
+                try? await Task.sleep(for: .seconds(1))
+                @MainActor func find(_ view: NSView) -> NSScrollView? {
+                    if let s = view as? NSScrollView { return s }
+                    for sub in view.subviews { if let s = find(sub) { return s } }
+                    return nil
+                }
+                guard let scroll = find(panel.contentView!) else { print("NO SCROLLVIEW"); exit(1) }
+                for round in 1...4 {
+                    let firstBefore = s.items.first?.text ?? "-"
+                    scroll.contentView.scroll(to: .zero)
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                    try? await Task.sleep(for: .seconds(1.5))
+                    print("SCROLL-TOP \(round): items=\(s.items.count) first=\(s.items.first?.text ?? "-") hasOlder=\(s.hasOlderHistory) offsetY=\(Int(scroll.contentView.bounds.origin.y)) (was first=\(firstBefore))")
+                    if !s.hasOlderHistory { break }
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_TEST"] != nil {
+            // Hosts the chat in a real window and drives it with scroll-wheel events.
+            Task {
+                model.session.items = (0..<30).map { i in
+                    ChatItem(id: "\(i)", role: i.isMultiple(of: 2) ? .user : .assistant,
+                             text: "Message \(i): " + String(repeating: "lorem ipsum ", count: 12))
+                }
+                // At the screen origin so event coordinates equal window coordinates; invisible.
+                let window: NSWindow
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_PANEL"] != nil {
+                    let panel = NotchPanel()
+                    panel.setFrame(NSRect(x: 0, y: 0, width: 560, height: 360), display: false)
+                    panel.ignoresMouseEvents = false
+                    window = panel
+                } else {
+                    window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 360),
+                                      styleMask: [.borderless], backing: .buffered, defer: false)
+                }
+                window.alphaValue = 0
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_PLAIN"] != nil {
+                    window.contentView = NSHostingView(rootView: ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            ForEach(model.session.items) { Text($0.text).frame(maxWidth: .infinity, alignment: .leading) }
+                        }
+                    }.frame(width: 540, height: 320).background(.black))
+                } else {
+                    window.contentView = NSHostingView(rootView: ConversationView(app: model, maxHeight: 320)
+                        .frame(width: 540).background(.black).environment(\.colorScheme, .dark))
+                }
+                window.orderFrontRegardless()
+                try? await Task.sleep(for: .seconds(1))
+                @MainActor func find(_ view: NSView) -> NSScrollView? {
+                    if let s = view as? NSScrollView { return s }
+                    for sub in view.subviews { if let s = find(sub) { return s } }
+                    return nil
+                }
+                guard let scroll = find(window.contentView!) else { print("NO SCROLLVIEW"); exit(1) }
+                print("SCROLLER style=\(scroll.scrollerStyle == .overlay ? "overlay" : "legacy") vertical=\(scroll.verticalScroller.map { String(describing: type(of: $0)) } ?? "none") hasVertical=\(scroll.hasVerticalScroller)")
+                let before = scroll.contentView.bounds.origin.y
+                // Trackpad-like gesture: continuous pixel deltas with began/changed/ended phases.
+                let phases: [Int64] = [1, 2, 2, 2, 2, 2, 4]
+                for phase in phases {
+                    let cg = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                                     wheel1: phase == 4 ? 0 : (before < 1 ? -40 : 40), wheel2: 0, wheel3: 0)!
+                    cg.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+                    cg.setIntegerValueField(.scrollWheelEventScrollPhase, value: phase)
+                    let screenHeight = NSScreen.screens.first?.frame.height ?? 1000
+                    cg.location = CGPoint(x: 280, y: screenHeight - 180)  // window centre, CG coordinates
+                    if let event = NSEvent(cgEvent: cg) { window.sendEvent(event) }
+                    try? await Task.sleep(for: .milliseconds(30))
+                }
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_WHEEL_ONLY"] == nil {
+                    // Programmatic scroll to the top (like a user reading history).
+                    scroll.contentView.scroll(to: NSPoint(x: 0, y: 0))
+                    scroll.reflectScrolledClipView(scroll.contentView)
+                }
+                if ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_NOWAIT"] == nil {
+                    try? await Task.sleep(for: .milliseconds(800))
+                } else {
+                    scroll.flashScrollers()
+                    try? await Task.sleep(for: .milliseconds(60))
+                }
+                let after = scroll.contentView.bounds.origin.y
+                print("SCROLL offset before=\(Int(before)) after=\(Int(after)) moved=\(abs(after - before) > 1)")
+                if let dir = ProcessInfo.processInfo.environment["NOTCHCLAW_SCROLL_PNG"],
+                   let rep = window.contentView!.bitmapImageRepForCachingDisplay(in: window.contentView!.bounds) {
+                    window.contentView!.cacheDisplay(in: window.contentView!.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: dir))
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_PROGRESS_TEST"] != nil {
+            // Samples the live progress while the mock gateway narrates a run.
+            Task {
+                while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
+                try? await Task.sleep(for: .seconds(1))
+                model.notch.expand(page: .chat)
+                model.session.send("what's my day tomorrow?")
+                for at in [0.3, 0.7, 1.2, 2.4, 3.8, 5.0, 6.0] {
+                    try? await Task.sleep(until: .now + .seconds(at == 0.3 ? 0.3 : 0), clock: .continuous)
+                    try? await Task.sleep(for: .seconds(at == 0.3 ? 0 : 0.6))
+                    let p = model.session.progress
+                    print("t+\(at)s activity=\(model.session.activity) headline=\(p.headline ?? "-") steps=\(p.steps.map { ($0.isActive ? "▶︎" : "✓") + $0.title }) plan=\(p.plan.map { "\($0.status):\($0.text)" })")
+                    if at == 2.4, let dir = ProcessInfo.processInfo.environment["NOTCHCLAW_PROGRESS_PNG"] {
+                        for (name, page) in [("progress-chat", NotchViewModel.Page.chat), ("progress-home", .home)] {
+                            model.notch.page = page
+                            let view = NotchRootView(app: model).frame(width: 760, height: page == .chat ? 520 : 330)
+                                .background(Color(white: 0.3)).environment(\.notchSnapshot, true)
+                            let renderer = ImageRenderer(content: view)
+                            renderer.scale = 2
+                            if let image = renderer.nsImage, let data = ImageExport.pngData(image) {
+                                try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
+                            }
+                        }
+                        model.notch.page = .chat
+                    }
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["NOTCHCLAW_GLOW_TEST"] != nil {
             // Reply while minimized must glow; replays after the user has looked must not.
             Task {
@@ -315,7 +453,8 @@ enum DebugHooks {
             while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
             try? await Task.sleep(for: .seconds(1))
             model.session.send(text)
-            try? await Task.sleep(for: .seconds(2.5))
+            let waitSeconds = Double(ProcessInfo.processInfo.environment["NOTCHCLAW_AUTOSEND_WAIT"] ?? "") ?? 2.5
+            try? await Task.sleep(for: .seconds(waitSeconds))
             for item in model.session.items { item.images.forEach(model.session.loadImage) }
             try? await Task.sleep(for: .seconds(1))
             let s = model.session

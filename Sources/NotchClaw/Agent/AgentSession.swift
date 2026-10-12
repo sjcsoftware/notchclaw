@@ -34,6 +34,7 @@ final class AgentSession {
     @ObservationIgnored private var finalizedRuns: Set<String> = []
     /// What the user last had on screen per run, to tell genuinely new replies from repeats.
     @ObservationIgnored private var seenContent: [String: String] = [:]
+    @ObservationIgnored private var reconcileTask: Task<Void, Never>?
     @ObservationIgnored private var usageTimer: Timer?
     @ObservationIgnored private var toastTask: Task<Void, Never>?
     @ObservationIgnored private var usageRetries = 0
@@ -41,6 +42,8 @@ final class AgentSession {
     /// Lets the UI suppress attention while the user is already looking.
     @ObservationIgnored var isUserLooking: () -> Bool = { false }
     @ObservationIgnored var onAttention: ((AttentionReason) -> Void)?
+    /// What the agent is doing in the current run (tools, commentary, plan).
+    private(set) var progress = RunProgress()
     /// Recent sessions for the picker (newest first).
     private(set) var sessions: [SessionSummary] = []
     @ObservationIgnored private var sessionsReload: Task<Void, Never>?
@@ -119,11 +122,21 @@ final class AgentSession {
         didConnect()
     }
 
+    /// Rows per history page. Tool calls and results are rows too, so pages are generous.
+    nonisolated static let historyPageSize = 150
+
+    /// Whether older transcript rows exist beyond what's loaded.
+    private(set) var hasOlderHistory = false
+    private(set) var isLoadingOlder = false
+    @ObservationIgnored private var olderOffset: Int?
+
     func loadHistory() {
         Task {
             do {
                 let result = try await gateway.request(
-                    "chat.history", ["sessionKey": .string(sessionKey), "limit": 40], timeout: 20)
+                    "chat.history",
+                    ["sessionKey": .string(sessionKey), "limit": .int(Int64(Self.historyPageSize))],
+                    timeout: 25)
                 applyHistory(result)
             } catch {
                 Log.error("chat.history failed: \(error.localizedDescription)")
@@ -131,7 +144,40 @@ final class AgentSession {
         }
     }
 
-    private func applyHistory(_ result: JSON) {
+    /// Fetches the next older page(s) and prepends them. Skips ahead past pages that hold
+    /// only tool rows so scrolling up always reveals earlier conversation.
+    func loadOlderHistory() {
+        guard hasOlderHistory, !isLoadingOlder, let start = olderOffset, gateway.state.isConnected else { return }
+        isLoadingOlder = true
+        Task {
+            defer { isLoadingOlder = false }
+            var offset = start
+            for _ in 0..<5 {
+                guard let result = try? await gateway.request(
+                    "chat.history",
+                    ["sessionKey": .string(sessionKey), "limit": .int(Int64(Self.historyPageSize)), "offset": .int(Int64(offset))],
+                    timeout: 25)
+                else { return }
+                let older = Self.historyItems(from: result, page: offset)
+                let known = Set(items.map(\.id))
+                let fresh = older.filter { !known.contains($0.id) }
+                items.insert(contentsOf: fresh, at: 0)
+                updatePaging(result)
+                guard let next = olderOffset, hasOlderHistory else { return }
+                if !fresh.isEmpty { return }
+                offset = next  // Only tool rows on that page: keep going.
+            }
+        }
+    }
+
+    private func updatePaging(_ result: JSON) {
+        let next = result["nextOffset"]?.int.map(Int.init)
+        hasOlderHistory = result["hasMore"]?.bool == true && next != nil
+        olderOffset = next
+    }
+
+    /// Displayable user/assistant messages from a chat.history page.
+    nonisolated static func historyItems(from result: JSON, page: Int) -> [ChatItem] {
         var restored: [ChatItem] = []
         for (index, message) in (result["messages"]?.array ?? []).enumerated() {
             let role = message["role"]?.string
@@ -141,7 +187,7 @@ final class AgentSession {
             guard !text.isEmpty || !attachments.isEmpty else { continue }
             if role == "user" { text = MessageText.stripInstruction(text) }
             let meta = message["__openclaw"]
-            let id = meta?["id"]?.string ?? message["id"]?.string ?? message["messageId"]?.string ?? "h\(index)"
+            let id = meta?["id"]?.string ?? message["id"]?.string ?? message["messageId"]?.string ?? "h\(page)-\(index)"
             var item = ChatItem(id: id, role: role == "user" ? .user : .assistant, text: text, images: attachments)
             item.runId = meta?["runId"]?.string
             if let ts = message["timestamp"]?.double ?? message["ts"]?.double {
@@ -149,6 +195,12 @@ final class AgentSession {
             }
             restored.append(item)
         }
+        return restored
+    }
+
+    private func applyHistory(_ result: JSON) {
+        let restored = Self.historyItems(from: result, page: 0)
+        updatePaging(result)
         // Keep a locally-sent message that history doesn't contain yet.
         let pendingLocal = items.filter { $0.isStreaming || ($0.role == .user && $0.runId != nil && activeRunId == $0.runId) }
         items = restored + pendingLocal.filter { local in !restored.contains { $0.text == local.text && $0.role == local.role } }
@@ -176,6 +228,7 @@ final class AgentSession {
         let localId = UUID().uuidString
         let idempotencyKey = UUID().uuidString.lowercased()
         items.append(ChatItem(id: localId, role: .user, text: text, runId: idempotencyKey))
+        progress = RunProgress(startedAt: Date())
         activity = .thinking(phase: nil)
         attention = nil
 
@@ -447,6 +500,15 @@ final class AgentSession {
         switch name {
         case "chat":
             handleChat(payload)
+        case "agent":
+            handleAgent(payload)
+        case "session.message":
+            // A message was committed to the transcript; generated images arrive this way.
+            let key = payload["sessionKey"]?.string ?? payload["key"]?.string ?? payload["session"]?["key"]?.string
+            guard Self.matches(key, sessionKey), let message = payload["message"],
+                  message["role"]?.string == "assistant"
+            else { return }
+            attachImages(from: message)
         case "exec.approval.requested", "plugin.approval.requested":
             handleApprovalRequested(payload)
         case "exec.approval.resolved", "plugin.approval.resolved":
@@ -486,8 +548,11 @@ final class AgentSession {
         guard let runId = p["runId"]?.text else { return }
         switch p["state"]?.string {
         case "status":
+            if activeRunId == nil { activeRunId = runId }
+            if progress.startedAt == nil { progress.startedAt = Date() }
+            progress.phase = Self.phaseText(p["phase"]?.string, retry: p["retry"])
             if activity != .streaming {
-                activity = .thinking(phase: Self.phaseText(p["phase"]?.string, retry: p["retry"]))
+                activity = .thinking(phase: progress.headline)
             }
         case "delta":
             activeRunId = runId
@@ -565,7 +630,79 @@ final class AgentSession {
         if activeRunId == nil || activeRunId == runId {
             activeRunId = nil
             activity = .idle
+            progress = RunProgress()
         }
+    }
+
+    // MARK: Live progress
+
+    /// `agent` events: tool calls, activity items, commentary, plans, and lifecycle.
+    private func handleAgent(_ p: JSON) {
+        if let key = p["sessionKey"]?.string {
+            guard Self.matches(key, sessionKey) else { return }
+        } else {
+            // Unscoped events: only follow the run this session is showing.
+            guard let runId = p["runId"]?.string, runId == activeRunId else { return }
+        }
+        guard let runId = p["runId"]?.text else { return }
+        let data = p["data"] ?? .null
+        let phase = data["phase"]?.string
+
+        switch p["stream"]?.string {
+        case "lifecycle":
+            if phase == "start" {
+                if activeRunId != runId { progress = RunProgress(startedAt: Date()) }
+                activeRunId = runId
+                if activity == .idle { activity = .thinking(phase: nil) }
+            } else if phase == "end" || phase == "error" {
+                progress.finishAll()
+            }
+            return
+        case "item":
+            if data["kind"]?.string == "preamble" {
+                if let text = data["progressText"]?.text {
+                    progress.note = Self.lastSentences(text)
+                }
+            } else {
+                guard data["suppressChannelProgress"]?.bool != true, data["hideFromChannelProgress"]?.bool != true,
+                      let id = data["toolCallId"]?.text ?? data["itemId"]?.text
+                else { return }
+                let status = data["status"]?.string?.lowercased()
+                let title = data["title"]?.text
+                    ?? data["name"]?.text.map { ToolTitles.title(name: $0, args: data["args"]) }
+                progress.upsert(id: id, title: title, active: phase != "end",
+                                error: status == "error" || status == "failed")
+            }
+        case "tool":
+            guard let id = data["toolCallId"]?.text, let name = data["name"]?.text else { return }
+            switch phase {
+            case "start":
+                // Activity items usually carry a nicer title; only fill in when absent.
+                let exists = progress.steps.contains { $0.id == id }
+                progress.upsert(id: id, title: exists ? nil : ToolTitles.title(name: name, args: data["args"]), active: true)
+            case "result", "end":
+                progress.upsert(id: id, title: nil, active: false, error: data["isError"]?.bool == true)
+            default:
+                break
+            }
+        case "plan":
+            guard phase == "update" || phase == nil else { return }
+            progress.plan = (data["steps"]?.array ?? []).compactMap { step in
+                guard let text = step["step"]?.text ?? step["text"]?.text ?? step["title"]?.text else { return nil }
+                return RunProgress.PlanItem(text: text, status: step["status"]?.string ?? "pending")
+            }
+        default:
+            return
+        }
+        if progress.startedAt == nil { progress.startedAt = Date() }
+        if case .thinking = activity { activity = .thinking(phase: progress.headline) }
+    }
+
+    /// Keeps commentary short enough for a single line or two.
+    nonisolated static func lastSentences(_ text: String, limit: Int = 160) -> String {
+        let trimmed = text.trimmed
+        guard trimmed.count > limit else { return trimmed }
+        return "…" + String(trimmed.suffix(limit - 1)).trimmed
     }
 
     private func upsertAssistant(runId: String, _ update: (inout ChatItem) -> Void) {
@@ -644,33 +781,51 @@ final class AgentSession {
         return NSImage(data: data)
     }
 
-    /// Live terminal events can omit attachments (the image is committed with the transcript),
-    /// so pull them from the latest history rows and attach them to the matching reply.
+    /// Live terminal events can omit attachments: the image is committed to the transcript
+    /// separately, sometimes after the run ends. Check the transcript a few times.
     func reconcileAttachments() {
-        Task {
-            try? await Task.sleep(for: .milliseconds(600))
-            guard let result = try? await gateway.request(
-                "chat.history", ["sessionKey": .string(sessionKey), "limit": 8], timeout: 20)
-            else { return }
-            for message in result["messages"]?.array ?? [] where message["role"]?.string == "assistant" {
-                let found = MessageText.images(message)
-                guard !found.isEmpty else { continue }
-                let runId = message["__openclaw"]?["runId"]?.string
-                let text = MessageText.extract(message)?.trimmed
-                let index = items.lastIndex { item in
-                    guard item.role == .assistant else { return false }
-                    if let runId, item.runId == runId { return true }
-                    return text != nil && item.text.trimmed == text
+        reconcileTask?.cancel()
+        reconcileTask = Task {
+            for delay in [0.6, 2.0, 4.0, 8.0] {
+                try? await Task.sleep(for: .seconds(delay))
+                guard !Task.isCancelled else { return }
+                guard let result = try? await gateway.request(
+                    "chat.history", ["sessionKey": .string(sessionKey), "limit": 8], timeout: 20)
+                else { continue }
+                var attachedAny = false
+                for message in result["messages"]?.array ?? [] where message["role"]?.string == "assistant" {
+                    if attachImages(from: message) { attachedAny = true }
                 }
-                if let index {
-                    items[index].images = Self.uniqueImages(items[index].images + found)
-                } else if runId != nil {
-                    // An image-only completion we never saw live (e.g. after reconnecting).
-                    items.append(ChatItem(id: message["__openclaw"]?["id"]?.string ?? UUID().uuidString,
-                                          role: .assistant, text: text ?? "", runId: runId, images: found))
-                }
+                // Once the latest reply has its images, stop polling.
+                if attachedAny || items.last(where: { $0.role == .assistant })?.images.isEmpty == false { return }
             }
         }
+    }
+
+    /// Attaches a committed assistant message's images to the reply it belongs to.
+    /// Returns true if it added images that weren't shown yet.
+    @discardableResult
+    func attachImages(from message: JSON) -> Bool {
+        let found = MessageText.images(message)
+        guard !found.isEmpty else { return false }
+        // Already showing all of them?
+        let shown = Set(items.flatMap(\.images).map(\.id))
+        guard !found.allSatisfy({ shown.contains($0.id) }) else { return false }
+
+        let runId = message["__openclaw"]?["runId"]?.string
+        let text = MessageText.extract(message)?.trimmed ?? ""
+        // 1) same run, 2) the live reply that contains this caption, 3) the latest reply.
+        let index = items.lastIndex(where: { $0.role == .assistant && runId != nil && $0.runId == runId })
+            ?? items.lastIndex(where: { $0.role == .assistant && !text.isEmpty && $0.text.trimmed.contains(text) })
+            ?? (items.last?.role == .assistant ? items.indices.last : nil)
+        if let index {
+            items[index].images = Self.uniqueImages(items[index].images + found)
+        } else {
+            items.append(ChatItem(id: message["__openclaw"]?["id"]?.string ?? UUID().uuidString,
+                                  role: .assistant, text: text, runId: runId, images: found))
+        }
+        Log.info("Attached \(found.count) image(s) from the transcript")
+        return true
     }
 
     private func handleApprovalRequested(_ p: JSON) {

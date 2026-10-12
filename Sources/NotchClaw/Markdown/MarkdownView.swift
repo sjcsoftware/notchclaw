@@ -254,7 +254,7 @@ struct HorizontalScroll<Content: View>: View {
         if snapshot {
             content.frame(maxWidth: .infinity, alignment: .leading).clipped()
         } else {
-            ScrollView(.horizontal, showsIndicators: false) { content }
+            ScrollView(.horizontal) { content.background(ScrollerHider(vertical: .invisible)) }
         }
     }
 }
