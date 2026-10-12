@@ -15,8 +15,9 @@ const v = (name, data) => { const f = ajv.getSchema(`p#/definitions/${name}`); i
 const methodSchema = { connect: 'ConnectParams', 'chat.send': 'ChatSendParams', 'chat.history': 'ChatHistoryParams', 'chat.abort': 'ChatAbortParams',
   'sessions.patch': 'SessionsPatchParams', 'sessions.compact': 'SessionsCompactParams', 'sessions.reset': 'SessionsResetParams',
   'sessions.describe': 'SessionsDescribeParams', 'sessions.messages.subscribe': 'SessionsMessagesSubscribeParams', 'models.list': 'ModelsListParams',
-  'exec.approval.resolve': 'ExecApprovalResolveParams', 'artifacts.download': 'ArtifactsDownloadParams' };
+  'exec.approval.resolve': 'ExecApprovalResolveParams', 'artifacts.download': 'ArtifactsDownloadParams', 'sessions.list': 'SessionsListParams', 'sessions.create': 'SessionsCreateParams', 'sessions.messages.unsubscribe': 'SessionsMessagesUnsubscribeParams' };
 const port = Number(process.env.PORT || 18799);
+const sessions = [{ key: 'agent:main:main', kind: 'direct', updatedAt: Date.now() - 60000 }];
 const wss = new WebSocketServer({ port });
 console.log('mock on', port);
 wss.on('connection', (ws) => {
@@ -64,6 +65,12 @@ wss.on('connection', (ws) => {
         return;
       }
       case 'artifacts.download': return res(f.id, true, { artifact: { id: f.params.artifactId, type: 'image', title: 'img', mimeType: 'image/png', download: { mode: 'bytes' } }, encoding: 'base64', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' });
+      case 'sessions.list': return res(f.id, true, { sessions: [...sessions].sort((a, b) => b.updatedAt - a.updatedAt), count: sessions.length });
+      case 'sessions.create': {
+        const key = 'agent:main:s-' + Math.random().toString(36).slice(2, 8);
+        sessions.push({ key, kind: 'direct', label: 'Fresh chat', updatedAt: Date.now() });
+        return res(f.id, true, { ok: true, key, sessionId: key, entry: { key } });
+      }
       case 'sessions.reset':
       case 'sessions.compact':
         if (!(ws.scopes || []).includes('operator.admin')) {

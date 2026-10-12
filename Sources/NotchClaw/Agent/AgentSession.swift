@@ -37,6 +37,11 @@ final class AgentSession {
     /// Lets the UI suppress attention while the user is already looking.
     @ObservationIgnored var isUserLooking: () -> Bool = { false }
     @ObservationIgnored var onAttention: ((AttentionReason) -> Void)?
+    /// Recent sessions for the picker (newest first).
+    private(set) var sessions: [SessionSummary] = []
+    @ObservationIgnored private var sessionsReload: Task<Void, Never>?
+    /// Switches the app to another session key (owned by AppModel, which persists the choice).
+    @ObservationIgnored var onSwitchSession: ((String) -> Void)?
     /// Asked when an action needs `operator.admin` that this device doesn't have.
     @ObservationIgnored var onNeedsAdmin: (() -> Void)?
     /// Fired when the agent starts producing (or finishes) visible reply text.
@@ -67,10 +72,14 @@ final class AgentSession {
         refreshSessionSettings()
         loadModels()
         refreshUsage()
+        loadSessions()
     }
 
     /// Called when the configured session key changes.
-    func sessionChanged() {
+    func sessionChanged(from previousKey: String? = nil) {
+        if let previousKey, gateway.state.isConnected {
+            Task { _ = try? await gateway.request("sessions.messages.unsubscribe", ["key": .string(previousKey)], timeout: 10) }
+        }
         items.removeAll()
         activity = .idle
         activeRunId = nil
@@ -248,16 +257,77 @@ final class AgentSession {
         }
     }
 
-    func newSession() {
-        guard requireAdmin(for: "New session") else { return }
+    // MARK: Sessions
+
+    var currentSessionTitle: String {
+        sessions.first { Self.matches($0.key, sessionKey) }?.title ?? SessionSummary.title(forKey: sessionKey)
+    }
+
+    func loadSessions() {
+        guard gateway.state.isConnected else { return }
+        Task {
+            guard let result = try? await gateway.request(
+                "sessions.list",
+                // Only long-standing params, so older gateways accept the request too.
+                ["limit": 25, "sortBy": "updatedAt"],
+                timeout: 20)
+            else { return }
+            sessions = Array((result["sessions"]?.array ?? []).compactMap { row -> SessionSummary? in
+                guard let key = row["key"]?.text, row["archived"]?.bool != true, !Self.isBackgroundSession(row) else {
+                    return nil
+                }
+                let updated = row["updatedAt"]?.double.map { Date(timeIntervalSince1970: $0 / 1000) }
+                return SessionSummary(key: key, title: SessionSummary.title(for: row), updatedAt: updated)
+            }.prefix(15))
+        }
+    }
+
+    /// Sub-agent, cron, and other spawned sessions aren't conversations to pick from.
+    nonisolated static func isBackgroundSession(_ row: JSON) -> Bool {
+        let key = (row["key"]?.string ?? "").lowercased()
+        if key.contains(":subagent:") || key.contains(":cron:") || key.hasPrefix("cron:") { return true }
+        return row["spawnedBy"]?.text != nil || row["parentSessionKey"]?.text != nil
+    }
+
+    /// Starts a brand-new session (no admin needed) and switches to it.
+    func createSession() {
+        guard gateway.state.isConnected else {
+            showToast("Not connected")
+            return
+        }
+        Task {
+            do {
+                let result = try await gateway.request(
+                    "sessions.create", ["idempotencyKey": .string(UUID().uuidString.lowercased())], timeout: 30)
+                guard let key = result["key"]?.text ?? result["entry"]?["key"]?.text else {
+                    showToast("The gateway didn't return a session")
+                    return
+                }
+                onSwitchSession?(key)
+                showToast("Started a new session")
+                loadSessions()
+            } catch {
+                showToast("Couldn't start a session: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func switchSession(to key: String) {
+        guard !Self.matches(key, sessionKey) else { return }
+        onSwitchSession?(key)
+    }
+
+    /// Clears the current session in place (requires admin).
+    func resetSession() {
+        guard requireAdmin(for: "Reset session") else { return }
         Task {
             do {
                 _ = try await gateway.request("sessions.reset", ["key": .string(sessionKey)], timeout: 30)
                 items.removeAll()
-                showToast("Started a fresh session")
+                showToast("Session cleared")
                 refreshSessionSettings()
             } catch {
-                if Self.isMissingAdmin(error) { adminMissing("New session") } else {
+                if Self.isMissingAdmin(error) { adminMissing("Reset session") } else {
                     showToast("Reset failed: \(error.localizedDescription)")
                 }
             }
@@ -357,6 +427,12 @@ final class AgentSession {
         case "sessions.changed":
             if let row = payload["session"], Self.matches(row["key"]?.string, sessionKey) {
                 sessionSettings.merge(row: row)
+            }
+            sessionsReload?.cancel()
+            sessionsReload = Task {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled else { return }
+                loadSessions()
             }
         default:
             break

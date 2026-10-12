@@ -247,3 +247,16 @@ struct AdminScopeTests {
         #expect(!AgentSession.isMissingAdmin(GatewayError.notConnected))
     }
 }
+
+struct SessionPickerTests {
+    @Test func testSessionTitlesAndBackgroundFiltering() {
+        #expect(SessionSummary.title(forKey: "agent:main:main") == "Main")
+        #expect(SessionSummary.title(forKey: "main") == "Main")
+        #expect(SessionSummary.title(forKey: "agent:main:s-abc") == "s-abc")
+        #expect(SessionSummary.title(for: ["key": "agent:main:x", "derivedTitle": "Trip planning"]) == "Trip planning")
+        #expect(SessionSummary.title(for: ["key": "agent:main:x", "label": "Work", "derivedTitle": "Ignored"]) == "Work")
+        #expect(AgentSession.isBackgroundSession(["key": "agent:main:subagent:123"]))
+        #expect(AgentSession.isBackgroundSession(["key": "agent:main:x", "spawnedBy": "agent:main:main"]))
+        #expect(!AgentSession.isBackgroundSession(["key": "agent:main:main"]))
+    }
+}

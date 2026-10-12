@@ -124,3 +124,25 @@ struct SessionSettings: Equatable {
         if let v = row["contextTokens"]?.double { contextTokens = v }
     }
 }
+
+/// A session row for the session picker.
+struct SessionSummary: Identifiable, Equatable {
+    var key: String
+    var title: String
+    var updatedAt: Date?
+    var id: String { key }
+
+    nonisolated static func title(for row: JSON) -> String {
+        if let explicit = row["label"]?.text ?? row["displayName"]?.text ?? row["derivedTitle"]?.text ?? row["autoLabel"]?.text {
+            return explicit
+        }
+        return title(forKey: row["key"]?.string ?? "")
+    }
+
+    /// "agent:main:main" → "Main"; "agent:main:abc123" → "abc123".
+    nonisolated static func title(forKey key: String) -> String {
+        let last = key.split(separator: ":").last.map(String.init) ?? key
+        if last.lowercased() == "main" || key.lowercased() == "main" { return "Main" }
+        return last.isEmpty ? "Session" : last
+    }
+}

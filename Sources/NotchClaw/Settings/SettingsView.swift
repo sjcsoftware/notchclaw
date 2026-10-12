@@ -476,7 +476,7 @@ private struct NotchSizeTuner: View {
     }
 }
 
-/// Explains and requests `operator.admin`, which OpenClaw requires for New session and Compact.
+/// Explains and requests `operator.admin`, which OpenClaw requires for Reset and Compact.
 private struct AdminAccessSection: View {
     let app: AppModel
     @State private var copied: String?
@@ -507,7 +507,7 @@ private struct AdminAccessSection: View {
         } header: {
             Text("Admin access")
         } footer: {
-            Text("OpenClaw only lets devices with the operator.admin scope reset (New session) or compact a session. Turning this on asks your gateway to upgrade this Mac; until you approve it, NotchClaw keeps working with its current access.")
+            Text("OpenClaw only lets devices with the operator.admin scope reset a session in place or compact it. Starting a new session doesn't need it. Turning this on asks your gateway to upgrade this Mac; until you approve it, NotchClaw keeps working with its current access.")
                 .foregroundStyle(.secondary)
         }
     }
@@ -520,10 +520,10 @@ private struct AdminAccessSection: View {
     @ViewBuilder
     private var status: some View {
         if app.gateway.hasAdmin {
-            Label("Granted — New session and Compact are available", systemImage: "checkmark.seal.fill")
+            Label("Granted — Reset and Compact are available", systemImage: "checkmark.seal.fill")
                 .foregroundStyle(.green)
         } else if !app.settings.requestAdminAccess {
-            Label("Not requested — New session and Compact are unavailable", systemImage: "lock")
+            Label("Not requested — Reset and Compact are unavailable", systemImage: "lock")
                 .foregroundStyle(.secondary)
         } else if !app.gateway.state.isConnected {
             Label("Will request when connected", systemImage: "clock")
