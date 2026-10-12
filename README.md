@@ -9,7 +9,7 @@
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-black">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-5.10%2B-F05138?logo=swift&logoColor=white">
   <img alt="Dependencies" src="https://img.shields.io/badge/dependencies-0-brightgreen">
-  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue">
 </p>
 
 <p align="center">
@@ -21,7 +21,20 @@
   <img src="docs/images/home.png" alt="NotchClaw's home screen open under the notch" width="820">
 </p>
 
----
+## Table of contents
+
+- [Features](#features)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Set up](#set-up)
+- [Use case](#use-case)
+- [Charts and images in replies](#charts-and-images-in-replies)
+- [How it works](#how-it-works)
+- [Privacy and security](#privacy-and-security)
+- [Development](#development)
+- [Troubleshooting](#troubleshooting)
+- [Acknowledgments](#acknowledgments)
+- [License](#license)
 
 ## Features
 
@@ -229,4 +242,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. The original product brie
 
 ## License
 
-[MIT](LICENSE) © 2026 chaseungjoon
+Copyright © 2026 chaseungjoon.
+
+NotchClaw is free software: you can redistribute it and/or modify it under the terms of the
+[GNU General Public License v3.0](LICENSE) as published by the Free Software Foundation, either
+version 3 of the License, or (at your option) any later version. It is distributed in the hope that it
+will be useful, but WITHOUT ANY WARRANTY; see the license for details.

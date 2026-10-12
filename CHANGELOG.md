@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+- Relicensed under GPL-3.0 (previously MIT).
+- README: table of contents.
+
 ## 0.4.0
 - New app icon: a graphite squircle with a lit notch and spectrum claw marks.
 - Native charts in replies via ```chart blocks, rendered with Swift Charts (bar, line, area, point, pie).
