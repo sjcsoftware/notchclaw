@@ -292,8 +292,26 @@ private struct SpeechBubble: View {
     let app: AppModel
 
     var body: some View {
+        VStack(spacing: 8) {
+            bubble
+            // While the agent works, say what it's doing under the bubble.
+            if app.session.activity.isBusy, app.voice.phase == .idle, let headline = app.session.progress.headline {
+                HStack(spacing: 7) {
+                    ShimmerText(text: headline, size: 11)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    ElapsedTime(since: app.session.progress.startedAt)
+                }
+                .frame(maxWidth: 420)
+                .transition(.opacity)
+                .animation(.easeInOut(duration: 0.2), value: headline)
+            }
+        }
+    }
+
+    private var bubble: some View {
         let voice = app.voice
-        ZStack {
+        return ZStack {
             if let content {
                 VStack(spacing: 0) {
                     BubbleTail()
@@ -329,7 +347,7 @@ private struct SpeechBubble: View {
                 .transition(.scale(scale: 0.85, anchor: .top).combined(with: .opacity))
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel("You said: \(content.text)")
-            } else {
+            } else if !app.session.activity.isBusy {
                 HStack(spacing: 5) {
                     if app.settings.pushToTalkEnabled {
                         Text("Hold")

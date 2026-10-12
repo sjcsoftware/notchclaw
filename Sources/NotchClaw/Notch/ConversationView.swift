@@ -11,6 +11,7 @@ struct ConversationView: View {
         if snapshot {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(app.session.items) { MessageRow(item: $0, session: app.session) }
+                progressRows
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         } else {
@@ -32,11 +33,7 @@ struct ConversationView: View {
                         MessageRow(item: item, session: session)
                             .id(item.id)
                     }
-                    if showsPendingThinking {
-                        ThinkingRow(phase: phaseText)
-                            .id("thinking")
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
-                    }
+                    progressRows
                     Color.clear.frame(height: 1).id("bottom")
                 }
                 .padding(.vertical, 4)
@@ -63,6 +60,22 @@ struct ConversationView: View {
             }
         }
         .animation(.spring(response: 0.4, dampingFraction: 0.85), value: showsPendingThinking)
+    }
+
+    /// Live run progress: a full card before reply text arrives, then a one-line
+    /// "currently doing" row under the streaming reply whenever a tool is running.
+    @ViewBuilder
+    private var progressRows: some View {
+        let session = app.session
+        if showsPendingThinking {
+            RunProgressView(progress: session.progress)
+                .id("thinking")
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+        } else if session.activity == .streaming, session.progress.activeStep != nil {
+            RunProgressView(progress: session.progress, compact: true)
+                .id("thinking")
+                .transition(.opacity)
+        }
     }
 
     private var showsPendingThinking: Bool {

@@ -146,3 +146,84 @@ struct SessionSummary: Identifiable, Equatable {
         return last.isEmpty ? "Session" : last
     }
 }
+
+/// Live view of what the agent is doing during a run: tool steps, its latest
+/// commentary ("I'll check the logs first…"), and any plan it published.
+struct RunProgress: Equatable {
+    struct Step: Identifiable, Equatable {
+        var id: String
+        var title: String
+        var isActive: Bool
+        var isError = false
+    }
+
+    struct PlanItem: Equatable {
+        var text: String
+        var status: String  // pending | in_progress | completed
+    }
+
+    var startedAt: Date?
+    var steps: [Step] = []
+    var note: String?
+    var plan: [PlanItem] = []
+    /// Coarse startup phase from `chat` status events ("Waking the model").
+    var phase: String?
+
+    var activeStep: Step? { steps.last { $0.isActive } }
+    var completedCount: Int { steps.filter { !$0.isActive }.count }
+    var isEmpty: Bool { steps.isEmpty && note == nil && plan.isEmpty }
+
+    /// One line for headers and bubbles: what's happening right now.
+    var headline: String? {
+        if let active = activeStep { return active.title }
+        if let current = plan.first(where: { $0.status == "in_progress" }) { return current.text }
+        if let note { return note }
+        if let last = steps.last { return "Done: \(last.title)" }
+        return phase
+    }
+
+    mutating func upsert(id: String, title: String?, active: Bool, error: Bool = false) {
+        if let index = steps.firstIndex(where: { $0.id == id }) {
+            if let title, !title.isEmpty { steps[index].title = title }
+            steps[index].isActive = active
+            steps[index].isError = steps[index].isError || error
+        } else if let title, !title.isEmpty {
+            steps.append(Step(id: id, title: title, isActive: active, isError: error))
+        }
+        if steps.count > 30 { steps.removeFirst(steps.count - 30) }
+    }
+
+    mutating func finishAll() {
+        for index in steps.indices { steps[index].isActive = false }
+    }
+}
+
+enum ToolTitles {
+    /// Fallback labels when the gateway sends a raw tool name without a title.
+    nonisolated static func title(name: String, args: JSON?) -> String {
+        let lower = name.lowercased()
+        func arg(_ keys: String...) -> String? {
+            for key in keys { if let v = args?[key]?.text { return v } }
+            return nil
+        }
+        func clip(_ s: String, _ n: Int = 48) -> String {
+            let line = s.split(separator: "\n").first.map(String.init) ?? s
+            return line.count > n ? String(line.prefix(n - 1)) + "…" : line
+        }
+        if lower.contains("exec") || lower == "bash" || lower.contains("shell") || lower.contains("command") {
+            return arg("command", "cmd", "input").map { "Running `\(clip($0))`" } ?? "Running a command"
+        }
+        if lower.contains("search") { return arg("query", "q").map { "Searching “\(clip($0, 40))”" } ?? "Searching the web" }
+        if lower.contains("fetch") || lower.contains("browse") || lower.contains("web") {
+            return arg("url").map { "Reading \(clip($0, 44))" } ?? "Browsing"
+        }
+        if lower.contains("read") { return arg("path", "file").map { "Reading \(clip($0, 44))" } ?? "Reading files" }
+        if lower.contains("write") || lower.contains("edit") || lower.contains("patch") {
+            return arg("path", "file").map { "Editing \(clip($0, 44))" } ?? "Editing files"
+        }
+        if lower.contains("image") { return "Generating an image" }
+        if lower.contains("memory") { return "Checking memory" }
+        let words = name.replacingOccurrences(of: "_", with: " ").replacingOccurrences(of: ".", with: " ")
+        return "Using " + words
+    }
+}

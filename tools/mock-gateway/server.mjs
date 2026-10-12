@@ -58,10 +58,25 @@ wss.on('connection', (ws) => {
         res(f.id, true, { runId, status: 'started' });
         console.log('  message starts with instruction:', f.params.message.startsWith('<notchclaw-format>'));
         const sk = 'agent:main:main'; let rs = 0;
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'status', phase: 'starting_model' }), 200);
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: '## Hi', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi' }] } }), 600);
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: ' there\n\n- one\n- two' }), 900);
-        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'final', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi there\n\n- one\n- two' }, { type: 'image', artifactId: 'art_1', mimeType: 'image/png', width: 1, height: 1 }] } }), 1200);
+        // With MOCK_PROGRESS=1, narrate the run like a real agent before replying.
+        const lag = process.env.MOCK_PROGRESS ? 4000 : 0;
+        if (lag) {
+          const agent = (at, stream, data) => setTimeout(() => event('agent', { runId, sessionKey: sk, seq: at, stream, ts: Date.now(), data }), at);
+          agent(150, 'lifecycle', { phase: 'start' });
+          agent(400, 'item', { kind: 'preamble', title: 'Preamble', phase: 'update', itemId: 'p1', progressText: "I'll check the forecast and your calendar, then summarize." });
+          agent(600, 'plan', { phase: 'update', steps: [{ step: 'Look up the weather', status: 'in_progress' }, { step: 'Check tomorrow\'s calendar', status: 'pending' }, { step: 'Summarize', status: 'pending' }] });
+          agent(800, 'tool', { phase: 'start', name: 'web_search', toolCallId: 't1', args: { query: 'seoul weather tomorrow' } });
+          agent(850, 'item', { kind: 'tool', itemId: 'i1', toolCallId: 't1', phase: 'start', title: 'Searching the web for “seoul weather tomorrow”', name: 'web_search' });
+          agent(1800, 'tool', { phase: 'result', name: 'web_search', toolCallId: 't1' });
+          agent(1850, 'item', { kind: 'tool', itemId: 'i1', toolCallId: 't1', phase: 'end', title: 'Searched the web for “seoul weather tomorrow”', status: 'completed' });
+          agent(2000, 'plan', { phase: 'update', steps: [{ step: 'Look up the weather', status: 'completed' }, { step: 'Check tomorrow\'s calendar', status: 'in_progress' }, { step: 'Summarize', status: 'pending' }] });
+          agent(2100, 'tool', { phase: 'start', name: 'exec', toolCallId: 't2', args: { command: 'gcal list --tomorrow' } });
+          agent(3300, 'tool', { phase: 'result', name: 'exec', toolCallId: 't2' });
+        }
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'status', phase: 'starting_model' }), 100);
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: '## Hi', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi' }] } }), 600 + lag);
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'delta', deltaText: ' there\n\n- one\n- two' }), 900 + lag);
+        setTimeout(() => event('chat', { runId, sessionKey: sk, seq: rs++, state: 'final', message: { role: 'assistant', content: [{ type: 'text', text: '## Hi there\n\n- one\n- two' }, { type: 'image', artifactId: 'art_1', mimeType: 'image/png', width: 1, height: 1 }] } }), 1200 + lag);
         if (process.env.MOCK_REPLAY) {
           // Things a real gateway can deliver after a reply: a repeated terminal event,
           // the same reply committed under another run id, and a silent run.

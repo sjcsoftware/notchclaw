@@ -60,7 +60,9 @@ final class GatewayClient {
     static let clientMode = "ui"
     static let role = "operator"
     static let scopes = ["operator.read", "operator.write", "operator.approvals"]
-    static let caps = ["usage-refreshing", "exec-approvals"]
+    /// `tool-events` opts in to live tool progress; `chat-only-assistant-text` skips the duplicate
+    /// assistant-text agent stream (NotchClaw renders reply text from `chat` only).
+    static let caps = ["usage-refreshing", "exec-approvals", "tool-events", "chat-only-assistant-text"]
 
     private(set) var state: ConnectionState = .idle
     private(set) var serverVersion: String?

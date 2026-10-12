@@ -177,6 +177,37 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if ProcessInfo.processInfo.environment["NOTCHCLAW_PROGRESS_TEST"] != nil {
+            // Samples the live progress while the mock gateway narrates a run.
+            Task {
+                while !model.gateway.state.isConnected { try? await Task.sleep(for: .milliseconds(200)) }
+                try? await Task.sleep(for: .seconds(1))
+                model.notch.expand(page: .chat)
+                model.session.send("what's my day tomorrow?")
+                for at in [0.3, 0.7, 1.2, 2.4, 3.8, 5.0, 6.0] {
+                    try? await Task.sleep(until: .now + .seconds(at == 0.3 ? 0.3 : 0), clock: .continuous)
+                    try? await Task.sleep(for: .seconds(at == 0.3 ? 0 : 0.6))
+                    let p = model.session.progress
+                    print("t+\(at)s activity=\(model.session.activity) headline=\(p.headline ?? "-") steps=\(p.steps.map { ($0.isActive ? "▶︎" : "✓") + $0.title }) plan=\(p.plan.map { "\($0.status):\($0.text)" })")
+                    if at == 2.4, let dir = ProcessInfo.processInfo.environment["NOTCHCLAW_PROGRESS_PNG"] {
+                        for (name, page) in [("progress-chat", NotchViewModel.Page.chat), ("progress-home", .home)] {
+                            model.notch.page = page
+                            let view = NotchRootView(app: model).frame(width: 760, height: page == .chat ? 520 : 330)
+                                .background(Color(white: 0.3)).environment(\.notchSnapshot, true)
+                            let renderer = ImageRenderer(content: view)
+                            renderer.scale = 2
+                            if let image = renderer.nsImage, let data = ImageExport.pngData(image) {
+                                try? data.write(to: URL(fileURLWithPath: dir).appendingPathComponent("\(name).png"))
+                            }
+                        }
+                        model.notch.page = .chat
+                    }
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["NOTCHCLAW_GLOW_TEST"] != nil {
             // Reply while minimized must glow; replays after the user has looked must not.
             Task {

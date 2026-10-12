@@ -41,6 +41,8 @@ final class AgentSession {
     /// Lets the UI suppress attention while the user is already looking.
     @ObservationIgnored var isUserLooking: () -> Bool = { false }
     @ObservationIgnored var onAttention: ((AttentionReason) -> Void)?
+    /// What the agent is doing in the current run (tools, commentary, plan).
+    private(set) var progress = RunProgress()
     /// Recent sessions for the picker (newest first).
     private(set) var sessions: [SessionSummary] = []
     @ObservationIgnored private var sessionsReload: Task<Void, Never>?
@@ -176,6 +178,7 @@ final class AgentSession {
         let localId = UUID().uuidString
         let idempotencyKey = UUID().uuidString.lowercased()
         items.append(ChatItem(id: localId, role: .user, text: text, runId: idempotencyKey))
+        progress = RunProgress(startedAt: Date())
         activity = .thinking(phase: nil)
         attention = nil
 
@@ -447,6 +450,8 @@ final class AgentSession {
         switch name {
         case "chat":
             handleChat(payload)
+        case "agent":
+            handleAgent(payload)
         case "exec.approval.requested", "plugin.approval.requested":
             handleApprovalRequested(payload)
         case "exec.approval.resolved", "plugin.approval.resolved":
@@ -486,8 +491,11 @@ final class AgentSession {
         guard let runId = p["runId"]?.text else { return }
         switch p["state"]?.string {
         case "status":
+            if activeRunId == nil { activeRunId = runId }
+            if progress.startedAt == nil { progress.startedAt = Date() }
+            progress.phase = Self.phaseText(p["phase"]?.string, retry: p["retry"])
             if activity != .streaming {
-                activity = .thinking(phase: Self.phaseText(p["phase"]?.string, retry: p["retry"]))
+                activity = .thinking(phase: progress.headline)
             }
         case "delta":
             activeRunId = runId
@@ -565,7 +573,79 @@ final class AgentSession {
         if activeRunId == nil || activeRunId == runId {
             activeRunId = nil
             activity = .idle
+            progress = RunProgress()
         }
+    }
+
+    // MARK: Live progress
+
+    /// `agent` events: tool calls, activity items, commentary, plans, and lifecycle.
+    private func handleAgent(_ p: JSON) {
+        if let key = p["sessionKey"]?.string {
+            guard Self.matches(key, sessionKey) else { return }
+        } else {
+            // Unscoped events: only follow the run this session is showing.
+            guard let runId = p["runId"]?.string, runId == activeRunId else { return }
+        }
+        guard let runId = p["runId"]?.text else { return }
+        let data = p["data"] ?? .null
+        let phase = data["phase"]?.string
+
+        switch p["stream"]?.string {
+        case "lifecycle":
+            if phase == "start" {
+                if activeRunId != runId { progress = RunProgress(startedAt: Date()) }
+                activeRunId = runId
+                if activity == .idle { activity = .thinking(phase: nil) }
+            } else if phase == "end" || phase == "error" {
+                progress.finishAll()
+            }
+            return
+        case "item":
+            if data["kind"]?.string == "preamble" {
+                if let text = data["progressText"]?.text {
+                    progress.note = Self.lastSentences(text)
+                }
+            } else {
+                guard data["suppressChannelProgress"]?.bool != true, data["hideFromChannelProgress"]?.bool != true,
+                      let id = data["toolCallId"]?.text ?? data["itemId"]?.text
+                else { return }
+                let status = data["status"]?.string?.lowercased()
+                let title = data["title"]?.text
+                    ?? data["name"]?.text.map { ToolTitles.title(name: $0, args: data["args"]) }
+                progress.upsert(id: id, title: title, active: phase != "end",
+                                error: status == "error" || status == "failed")
+            }
+        case "tool":
+            guard let id = data["toolCallId"]?.text, let name = data["name"]?.text else { return }
+            switch phase {
+            case "start":
+                // Activity items usually carry a nicer title; only fill in when absent.
+                let exists = progress.steps.contains { $0.id == id }
+                progress.upsert(id: id, title: exists ? nil : ToolTitles.title(name: name, args: data["args"]), active: true)
+            case "result", "end":
+                progress.upsert(id: id, title: nil, active: false, error: data["isError"]?.bool == true)
+            default:
+                break
+            }
+        case "plan":
+            guard phase == "update" || phase == nil else { return }
+            progress.plan = (data["steps"]?.array ?? []).compactMap { step in
+                guard let text = step["step"]?.text ?? step["text"]?.text ?? step["title"]?.text else { return nil }
+                return RunProgress.PlanItem(text: text, status: step["status"]?.string ?? "pending")
+            }
+        default:
+            return
+        }
+        if progress.startedAt == nil { progress.startedAt = Date() }
+        if case .thinking = activity { activity = .thinking(phase: progress.headline) }
+    }
+
+    /// Keeps commentary short enough for a single line or two.
+    nonisolated static func lastSentences(_ text: String, limit: Int = 160) -> String {
+        let trimmed = text.trimmed
+        guard trimmed.count > limit else { return trimmed }
+        return "…" + String(trimmed.suffix(limit - 1)).trimmed
     }
 
     private func upsertAssistant(runId: String, _ update: (inout ChatItem) -> Void) {

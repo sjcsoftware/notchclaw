@@ -133,7 +133,8 @@ struct ModelTag: View {
         switch app.gateway.state {
         case .connected:
             switch app.session.activity {
-            case .thinking(let phase): return phase ?? "Thinking…"
+            // The full "what it's doing" line lives in the progress card and under the agent.
+            case .thinking: return "Working…"
             case .streaming: return "Replying…"
             case .compacting: return "Compacting…"
             case .idle: return app.session.sessionSettings.modelRef.map(AgentSession.shortModelName) ?? "Default model"

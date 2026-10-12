@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.6.2
+- **Live progress while the agent works.** Instead of sitting on "Waking the model", NotchClaw shows what the agent is doing right now: tool steps as they start and finish (with spinners and checkmarks), the agent's own commentary ("I'll check the logs first…"), its plan, and elapsed time. It's a card in the chat, a one-line caption under the agent on the home screen, and a running-tool line under a streaming reply. NotchClaw now subscribes to OpenClaw's tool-event stream to get this.
+
 ## 0.6.1
 - Fix: the minimized notch no longer glows when there's no new message. Repeated terminal events for a run, the same reply committed under a second run id, silent runs, and replies you already read now leave the notch dark (and no longer duplicate the reply in chat).
 - Fix: a streamed snapshot frame could repeat its last chunk of text.
