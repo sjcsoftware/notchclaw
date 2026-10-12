@@ -37,6 +37,14 @@ wss.on('connection', (ws) => {
       const sigOk = crypto.verify(null, Buffer.from(payload), key, Buffer.from(d.signature.replace(/-/g,'+').replace(/_/g,'/'), 'base64'));
       const idOk = crypto.createHash('sha256').update(pub).digest('hex') === d.id;
       console.log(`  signature ${sigOk} deviceId ${idOk} nonce ${d.nonce === nonce} signedAt ${d.signedAt === ts}`);
+      // Simulate OpenClaw's scope upgrade: admin needs approval (create $MOCK_ADMIN_APPROVED_FILE to approve).
+      const wantsAdmin = (p.scopes || []).includes('operator.admin');
+      const approved = process.env.MOCK_ADMIN_APPROVED_FILE ? fs.existsSync(process.env.MOCK_ADMIN_APPROVED_FILE) : true;
+      if (wantsAdmin && !approved) {
+        console.log('  admin upgrade pending');
+        return res(f.id, false, undefined, { code: 'NOT_PAIRED', message: 'pairing required', details: { code: 'PAIRING_REQUIRED', requestId: 'req-admin-1', recommendedNextStep: 'wait_then_retry' } });
+      }
+      ws.scopes = p.scopes || [];
       return res(f.id, true, { type: 'hello-ok', protocol: 4, server: { version: 'mock-2026.8', connId: 'c1' }, features: { methods: [], events: [] }, snapshot: {}, auth: { role: 'operator', scopes: p.scopes, deviceToken: 'devtok' }, policy: { maxPayload: 26214400, maxBufferedBytes: 52428800, tickIntervalMs: 15000 } });
     }
     switch (f.method) {
@@ -56,6 +64,12 @@ wss.on('connection', (ws) => {
         return;
       }
       case 'artifacts.download': return res(f.id, true, { artifact: { id: f.params.artifactId, type: 'image', title: 'img', mimeType: 'image/png', download: { mode: 'bytes' } }, encoding: 'base64', data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==' });
+      case 'sessions.reset':
+      case 'sessions.compact':
+        if (!(ws.scopes || []).includes('operator.admin')) {
+          return res(f.id, false, undefined, { code: 'FORBIDDEN', message: 'missing scope: operator.admin', details: { code: 'MISSING_SCOPE', missingScope: 'operator.admin', requiredScopes: ['operator.admin'] } });
+        }
+        return res(f.id, true, { ok: true, key: f.params.key });
       default: return res(f.id, true, { ok: true });
     }
   });

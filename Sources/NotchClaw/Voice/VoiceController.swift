@@ -14,9 +14,9 @@ final class VoiceController {
         case failed(String)
     }
 
-    internal(set) var phase: Phase = .idle
-    internal(set) var transcript = ""
-    internal(set) var level: Float = 0
+    var phase: Phase = .idle
+    var transcript = ""
+    var level: Float = 0
 
     /// Delivers the final transcript after release.
     @ObservationIgnored var onFinished: ((String) -> Void)?

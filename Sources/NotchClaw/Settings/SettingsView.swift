@@ -99,6 +99,8 @@ private struct GatewaySettings: View {
                 }
             }
 
+            AdminAccessSection(app: app)
+
             Section {
                 HStack {
                     Spacer()
@@ -471,5 +473,81 @@ private struct NotchSizeTuner: View {
                     .frame(width: 52, alignment: .trailing)
             }
         }
+    }
+}
+
+/// Explains and requests `operator.admin`, which OpenClaw requires for New session and Compact.
+private struct AdminAccessSection: View {
+    let app: AppModel
+    @State private var copied: String?
+
+    var body: some View {
+        Section {
+            Toggle("Request admin access", isOn: Binding(
+                get: { app.settings.requestAdminAccess },
+                set: { value in
+                    app.settings.requestAdminAccess = value
+                    app.gateway.setRequestAdmin(value)
+                }))
+            LabeledContent("Status") { status }
+            if app.settings.requestAdminAccess, !app.gateway.hasAdmin {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("On the gateway host, open a terminal and run:")
+                        .font(.callout)
+                    command("openclaw devices list")
+                    command("openclaw devices approve \(pendingRequestId ?? "--latest")")
+                    Text(pendingRequestId == nil
+                         ? "`devices list` shows NotchClaw's pending request with Requested vs Approved scopes. `--latest` approves the newest pending request; check it's NotchClaw's first."
+                         : "This approves NotchClaw's pending upgrade to operator.admin. NotchClaw switches over automatically within a few seconds.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+        } header: {
+            Text("Admin access")
+        } footer: {
+            Text("OpenClaw only lets devices with the operator.admin scope reset (New session) or compact a session. Turning this on asks your gateway to upgrade this Mac; until you approve it, NotchClaw keeps working with its current access.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var pendingRequestId: String? {
+        if case .pending(let id) = app.gateway.adminAccess { return id }
+        return nil
+    }
+
+    @ViewBuilder
+    private var status: some View {
+        if app.gateway.hasAdmin {
+            Label("Granted — New session and Compact are available", systemImage: "checkmark.seal.fill")
+                .foregroundStyle(.green)
+        } else if !app.settings.requestAdminAccess {
+            Label("Not requested — New session and Compact are unavailable", systemImage: "lock")
+                .foregroundStyle(.secondary)
+        } else if !app.gateway.state.isConnected {
+            Label("Will request when connected", systemImage: "clock")
+                .foregroundStyle(.secondary)
+        } else {
+            Label("Waiting for approval on the gateway", systemImage: "hourglass")
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private func command(_ text: String) -> some View {
+        HStack {
+            Text(text)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+            Spacer()
+            Button(copied == text ? "Copied" : "Copy") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                copied = text
+            }
+            .controlSize(.small)
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.06)))
     }
 }

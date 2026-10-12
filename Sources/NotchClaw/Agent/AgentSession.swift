@@ -14,13 +14,13 @@ final class AgentSession {
         + "\"data\":[{\"x\":\"Mon\",\"y\":3,\"series\":\"optional\"}]}. When a picture is requested or would "
         + "clearly help, use your image generation tool. Keep it skimmable.</notchclaw-format>"
 
-    internal(set) var items: [ChatItem] = []
-    internal(set) var activity: AgentActivity = .idle
-    internal(set) var attention: AttentionReason?
+    var items: [ChatItem] = []
+    var activity: AgentActivity = .idle
+    var attention: AttentionReason?
     private(set) var approvals: [PendingApproval] = []
-    internal(set) var usage: UsageInfo?
+    var usage: UsageInfo?
     private(set) var models: [ModelOption] = []
-    internal(set) var sessionSettings = SessionSettings()
+    var sessionSettings = SessionSettings()
     private(set) var toast: String?
     private(set) var historyLoaded = false
     /// Decoded agent images keyed by attachment id.
@@ -37,6 +37,8 @@ final class AgentSession {
     /// Lets the UI suppress attention while the user is already looking.
     @ObservationIgnored var isUserLooking: () -> Bool = { false }
     @ObservationIgnored var onAttention: ((AttentionReason) -> Void)?
+    /// Asked when an action needs `operator.admin` that this device doesn't have.
+    @ObservationIgnored var onNeedsAdmin: (() -> Void)?
     /// Fired when the agent starts producing (or finishes) visible reply text.
     @ObservationIgnored var onAssistantOutput: (() -> Void)?
 
@@ -230,6 +232,7 @@ final class AgentSession {
             showToast("Wait for the current reply to finish")
             return
         }
+        guard requireAdmin(for: "Compact") else { return }
         activity = .compacting
         Task {
             do {
@@ -237,13 +240,16 @@ final class AgentSession {
                 showToast("Context compacted")
                 refreshSessionSettings()
             } catch {
-                showToast("Compaction failed: \(error.localizedDescription)")
+                if Self.isMissingAdmin(error) { adminMissing("Compact") } else {
+                    showToast("Compaction failed: \(error.localizedDescription)")
+                }
             }
             if activity == .compacting { activity = .idle }
         }
     }
 
     func newSession() {
+        guard requireAdmin(for: "New session") else { return }
         Task {
             do {
                 _ = try await gateway.request("sessions.reset", ["key": .string(sessionKey)], timeout: 30)
@@ -251,9 +257,34 @@ final class AgentSession {
                 showToast("Started a fresh session")
                 refreshSessionSettings()
             } catch {
-                showToast("Reset failed: \(error.localizedDescription)")
+                if Self.isMissingAdmin(error) { adminMissing("New session") } else {
+                    showToast("Reset failed: \(error.localizedDescription)")
+                }
             }
         }
+    }
+
+    /// OpenClaw only lets admin devices reset or compact a session.
+    private func requireAdmin(for action: String) -> Bool {
+        guard gateway.state.isConnected, !gateway.hasAdmin else { return true }
+        adminMissing(action)
+        return false
+    }
+
+    private func adminMissing(_ action: String) {
+        if case .pending = gateway.adminAccess {
+            showToast("\(action) needs admin access — approve it on your gateway")
+        } else {
+            showToast("\(action) needs admin access — see Settings › Gateway")
+        }
+        onNeedsAdmin?()
+    }
+
+    nonisolated static func isMissingAdmin(_ error: Error) -> Bool {
+        guard let error = error as? GatewayError else { return false }
+        if error.details?["missingScope"]?.string == GatewayClient.adminScope { return true }
+        return error.code == "FORBIDDEN" && error.message.contains("operator.admin")
+            || error.message.localizedCaseInsensitiveContains("missing scope: operator.admin")
     }
 
     func resolveApproval(_ approval: PendingApproval, decision: String) {

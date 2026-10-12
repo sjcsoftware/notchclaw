@@ -235,3 +235,15 @@ struct SyntaxHighlighterTests {
         #expect(SyntaxHighlighter.language(for: nil) == nil)
     }
 }
+
+struct AdminScopeTests {
+    @Test func testDetectsMissingAdminScopeErrors() {
+        let structured = GatewayError(frame: ["code": "FORBIDDEN", "message": "missing scope: operator.admin",
+                                              "details": ["code": "MISSING_SCOPE", "missingScope": "operator.admin"]])
+        #expect(AgentSession.isMissingAdmin(structured))
+        let legacy = GatewayError(code: "INVALID_REQUEST", message: "Reset failed: missing scope: operator.admin")
+        #expect(AgentSession.isMissingAdmin(legacy))
+        #expect(!AgentSession.isMissingAdmin(GatewayError(code: "FORBIDDEN", message: "missing scope: operator.pairing")))
+        #expect(!AgentSession.isMissingAdmin(GatewayError.notConnected))
+    }
+}

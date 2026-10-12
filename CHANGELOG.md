@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.2
+- Fix: opening Chat from the home screen no longer shows a black panel until you scroll.
+- New session and Compact need OpenClaw's `operator.admin` scope. **Settings › Gateway › Admin access** can now request it, shows the exact `openclaw devices approve` command to run on the gateway host, keeps NotchClaw working on its current access while approval is pending, and switches over automatically once approved. Without admin, those buttons explain what's needed instead of failing.
+
 ## 0.5.1
 - Syntax highlighting in code blocks: keywords, strings, numbers, comments, types, functions, built-ins, and decorators, for Python, Swift, JavaScript/TypeScript, shell, JSON, Go, Rust, C-family, Java/Kotlin, Ruby, SQL, YAML, CSS, PHP, and Lua. Unknown languages stay plain.
 

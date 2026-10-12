@@ -177,6 +177,35 @@ extension VoiceController {
 @MainActor
 enum DebugHooks {
     static func install(_ model: AppModel) {
+        if let approvalFile = ProcessInfo.processInfo.environment["NOTCHCLAW_ADMIN_TEST"] {
+            // Walks the admin-upgrade flow against the mock gateway and prints each state.
+            Task {
+                var last = ""
+                @MainActor func report(_ tag: String) {
+                    let line = "\(model.gateway.state) admin=\(model.gateway.adminAccess) hasAdmin=\(model.gateway.hasAdmin)"
+                    if line != last { print("\(tag) \(line)"); last = line }
+                }
+                model.session.newSession()  // before approval: should be refused politely
+                for tick in 0..<80 {
+                    try? await Task.sleep(for: .milliseconds(500))
+                    report("T\(tick)")
+                    if tick == 6 {
+                        model.session.newSession()
+                        print("TOAST \(model.session.toast ?? "-")")
+                    }
+                    if tick == 10 { FileManager.default.createFile(atPath: approvalFile, contents: Data()); print("APPROVED") }
+                    if model.gateway.hasAdmin, model.gateway.state.isConnected {
+                        model.session.newSession()
+                        try? await Task.sleep(for: .seconds(1.5))
+                        print("TOAST \(model.session.toast ?? "-")")
+                        break
+                    }
+                }
+                fflush(stdout)
+                exit(0)
+            }
+            return
+        }
         if ProcessInfo.processInfo.environment["NOTCHCLAW_CHECK_IMAGES"] != nil {
             // Loads history the normal way and reports which agent images actually decode.
             Task {
