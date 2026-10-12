@@ -30,14 +30,20 @@ final class HotKey {
         }, types.count, &types, context, &handlerRef)
     }
 
-    func register(_ combo: KeyCombo?) {
+    /// Registers the combo (or clears it with nil). Returns false if the system refused it.
+    @discardableResult
+    func register(_ combo: KeyCombo?) -> Bool {
         unregister()
-        guard let combo else { return }
+        guard let combo else { return true }
         let id = EventHotKeyID(signature: Self.signature, id: 1)
         let status = RegisterEventHotKey(combo.keyCode, combo.modifiers, id, GetApplicationEventTarget(), 0, &hotKeyRef)
         if status != noErr {
             Log.error("RegisterEventHotKey failed (\(status)) for \(combo.display)")
+            hotKeyRef = nil
+            return false
         }
+        Log.info("Registered push-to-talk \(combo.display)")
+        return true
     }
 
     func unregister() {
