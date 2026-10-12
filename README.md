@@ -32,7 +32,7 @@
 - [Acknowledgments](#acknowledgments)
 - [License](#license)
 
-> How it works, privacy and security, development, and troubleshooting live in [CONTRIBUTING.md](CONTRIBUTING.md).
+> For more details, check [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Features
 
