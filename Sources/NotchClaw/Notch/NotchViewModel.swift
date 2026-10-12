@@ -32,13 +32,17 @@ struct NotchGeometry: Equatable {
 
 enum NotchLayout {
     static let earWidth: CGFloat = 14
-    static let homeWidth: CGFloat = 556
+    static let homeWidth: CGFloat = 600
     static let headerTopPadding: CGFloat = 10
-    static let baseExpandedWidth: CGFloat = 580
+    static let baseExpandedWidth: CGFloat = 620
     static let minExpandedHeight: CGFloat = 150
     static let glowPadding: CGFloat = 36
     static let closedCorners = (top: CGFloat(6), bottom: CGFloat(13))
     static let openCorners = (top: CGFloat(14), bottom: CGFloat(26))
+    /// Side inset for expanded content: clears the concave top "ears" plus a comfortable visible margin.
+    static let contentInset: CGFloat = openCorners.top + 26
+    /// Extra inset for the header row, which sits closest to the curved top corners.
+    static let headerInset: CGFloat = 6
 }
 
 /// UI state for the notch overlay.

@@ -14,6 +14,7 @@ struct ChatView: View {
         VStack(spacing: 10) {
             NotchHeader(app: app, showsBack: true)
                 .padding(.top, NotchLayout.headerTopPadding)
+                .padding(.horizontal, NotchLayout.headerInset)
             ConnectionBanner(app: app)
             ForEach(app.session.approvals) { approval in
                 ApprovalCard(approval: approval) { decision in
@@ -27,8 +28,8 @@ struct ChatView: View {
             ConversationView(app: app, maxHeight: conversationMax)
             Composer(app: app)
         }
-        .padding(.horizontal, NotchLayout.openCorners.top + 12)
-        .padding(.bottom, 14)
+        .padding(.horizontal, NotchLayout.contentInset)
+        .padding(.bottom, 18)
         .frame(width: width)
         .animation(.spring(response: 0.45, dampingFraction: 0.86), value: wantsWide)
         .animation(.spring(response: 0.35, dampingFraction: 0.85), value: app.voice.phase)
