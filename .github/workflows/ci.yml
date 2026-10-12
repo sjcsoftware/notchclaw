@@ -7,12 +7,24 @@ on:
 
 jobs:
   build-and-test:
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Toolchain
-        run: swift --version
+        run: |
+          xcodebuild -version
+          swift --version
       - name: Build
-        run: swift build -c release --arch arm64
+        run: |
+          set -o pipefail
+          swift build -c release --arch arm64 2>&1 | tee build.log || {
+            grep -E "error:" build.log | sort -u | head -40 | sed -E 's/^(.*)$/::error::\1/'
+            exit 1
+          }
       - name: Test
-        run: swift test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log || {
+            grep -E "error:|✘" test.log | sort -u | head -40 | sed -E 's/^(.*)$/::error::\1/'
+            exit 1
+          }
