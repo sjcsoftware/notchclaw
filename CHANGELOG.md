@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.7.0
+- **LaTeX math in replies.** Equations are typeset instead of showing raw TeX. Inline math (`\(…\)`, `$…$`) sits on the text baseline. Display math (`\[…\]`, `$$…$$`, or a bare `\begin{align}`) is centered and scrolls sideways when it's wider than the chat. Supported: fractions, roots, sub- and superscripts, sums and integrals with limits, `\left…\right` delimiters, matrices, `cases`, `aligned`, accents, `\boxed`, `\text`, Greek, `\mathbb`/`\mathcal`/`\mathbf`, and the usual operators and arrows. Math is set in the STIX Two Math font that ships with macOS, with no new dependencies. Prices like "$5 and $10" stay plain text. Right-click an equation to copy its LaTeX.
+
 ## 0.6.6
 - Fix: you can scroll all the way back through a conversation. NotchClaw used to load only the last 40 transcript rows, and tool calls and results count as rows, so tool-heavy chats showed just a handful of messages. It now loads 150 rows up front and automatically fetches earlier pages when you reach the top (keeping your place), skipping past pages that contain only tool activity. An "Earlier messages" control at the top also loads more on click.
 

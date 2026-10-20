@@ -45,6 +45,8 @@ private struct BlockView: View {
             } else {
                 CodeBlockView(language: language, code: code, size: baseSize - 1.5)
             }
+        case .math(let latex):
+            MathBlockView(latex: latex, size: baseSize)
         case .quote(let inner):
             HStack(alignment: .top, spacing: 10) {
                 RoundedRectangle(cornerRadius: 1.5)
@@ -101,25 +103,59 @@ private struct BlockView: View {
     }
 }
 
-/// Inline Markdown (bold, italics, code, links, strikethrough) via Foundation's parser.
+/// Inline Markdown (bold, italics, code, links, strikethrough) via Foundation's parser,
+/// with LaTeX math typeset in place.
 struct InlineText: View {
     let attributed: AttributedString
+    let math: [MathImage]
     let size: CGFloat
     let weight: Font.Weight
 
     init(_ source: String, size: CGFloat, weight: Font.Weight = .regular) {
         self.size = size
         self.weight = weight
-        attributed = Self.render(source, size: size)
+        // Math is cut out before Markdown parsing (which would eat its backslashes and underscores)
+        // and stands in as placeholder characters until the text is assembled.
+        var markdown = ""
+        var math: [MathImage] = []
+        for piece in MathSyntax.split(source) {
+            switch piece {
+            case .text(let text):
+                markdown += text
+            case .math(let latex, let display):
+                markdown.append(MathSyntax.placeholder(math.count))
+                math.append(MathRenderer.render(latex, size: size * MathRenderer.textScale, display: display))
+            }
+        }
+        self.math = math
+        attributed = Self.render(markdown, size: size)
     }
 
     var body: some View {
-        Text(attributed)
+        text
             .font(.system(size: size, weight: weight))
             .foregroundStyle(.white.opacity(0.92))
             .lineSpacing(size * 0.22)
             .fixedSize(horizontal: false, vertical: true)
             .tint(Color(red: 0.55, green: 0.75, blue: 1.0))
+    }
+
+    private var text: Text {
+        guard !math.isEmpty else { return Text(attributed) }
+        var result = Text(verbatim: "")
+        var start = attributed.startIndex
+        var index = start
+        while index < attributed.endIndex {
+            let next = attributed.characters.index(after: index)
+            if let k = MathSyntax.placeholderIndex(attributed.characters[index]), k < math.count {
+                if start < index { result = result + Text(AttributedString(attributed[start..<index])) }
+                result = result + math[k].text
+                start = next
+            }
+            index = next
+        }
+        if start < attributed.endIndex { result = result + Text(AttributedString(attributed[start...])) }
+        return result
     }
 
     static func render(_ source: String, size: CGFloat) -> AttributedString {
@@ -183,6 +219,29 @@ struct CodeBlockView: View {
         }
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(.white.opacity(0.08)))
+    }
+}
+
+/// A display equation, centered, scrolling sideways if it's wider than the chat.
+struct MathBlockView: View {
+    let latex: String
+    let size: CGFloat
+
+    var body: some View {
+        let math = MathRenderer.render(latex, size: size * MathRenderer.textScale, display: true)
+        let image = Image(nsImage: math.image).renderingMode(.template)
+        ViewThatFits(in: .horizontal) {
+            image.frame(maxWidth: .infinity)
+            HorizontalScroll { image }
+        }
+        .foregroundStyle(.white.opacity(0.92))
+        .accessibilityLabel(latex)
+        .contextMenu {
+            Button("Copy LaTeX") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(latex, forType: .string)
+            }
+        }
     }
 }
 

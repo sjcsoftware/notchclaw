@@ -5,6 +5,8 @@ indirect enum MarkdownBlock: Equatable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case code(language: String?, code: String)
+    /// Display math (`$$…$$`, `\[…\]`, or a bare `\begin{align}…`), as LaTeX source.
+    case math(String)
     case quote([MarkdownBlock])
     case list(ordered: Bool, start: Int, items: [ListItem])
     case table(header: [String], alignments: [TableAlignment], rows: [[String]])
@@ -71,6 +73,14 @@ enum MarkdownParser {
                         index += 1
                     }
                     blocks.append(.code(language: language.isEmpty ? nil : language, code: code.joined(separator: "\n")))
+                    continue
+                }
+
+                // Display math
+                if let math = parseDisplayMath(trimmed) {
+                    flushParagraph()
+                    blocks.append(.math(math.latex))
+                    if !math.trailing.isEmpty { paragraph.append(math.trailing) }
                     continue
                 }
 
@@ -153,6 +163,55 @@ enum MarkdownParser {
             return blocks
         }
 
+        /// Display math starting on this line, through its closing delimiter (or the end, while streaming).
+        /// Text after the closing delimiter on its last line is returned as `trailing`.
+        mutating func parseDisplayMath(_ trimmed: String) -> (latex: String, trailing: String)? {
+            let closer: String
+            var keepDelimiters = false
+            if trimmed.hasPrefix("$$") {
+                closer = "$$"
+            } else if trimmed.hasPrefix("\\[") {
+                closer = "\\]"
+            } else if let env = Self.mathEnvironment(trimmed) {
+                closer = "\\end{\(env)}"
+                keepDelimiters = true
+            } else {
+                return nil
+            }
+            let openerLength = keepDelimiters ? 0 : 2
+            var body = String(trimmed.dropFirst(openerLength))
+            let searchFrom = keepDelimiters ? body.index(after: body.startIndex) : body.startIndex
+            // A single line with text after the closing delimiter is inline math in a paragraph.
+            if let close = body.range(of: closer, range: searchFrom..<body.endIndex) {
+                let after = body[close.upperBound...].trimmingCharacters(in: .whitespaces)
+                guard after.isEmpty else { return nil }
+                body = String(body[..<(keepDelimiters ? close.upperBound : close.lowerBound)])
+                index += 1
+                return (body.trimmingCharacters(in: .whitespaces), "")
+            }
+            var latex = [body]
+            var trailing = ""
+            index += 1
+            while index < lines.count {
+                let line = lines[index]
+                index += 1
+                if let close = line.range(of: closer) {
+                    latex.append(String(line[..<(keepDelimiters ? close.upperBound : close.lowerBound)]))
+                    trailing = line[close.upperBound...].trimmingCharacters(in: .whitespaces)
+                    break
+                }
+                latex.append(line)
+            }
+            return (latex.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), trailing)
+        }
+
+        static func mathEnvironment(_ t: String) -> String? {
+            guard t.hasPrefix("\\begin{"), let close = t.firstIndex(of: "}") else { return nil }
+            let name = String(t[t.index(t.startIndex, offsetBy: 7)..<close])
+            let known = ["equation", "align", "aligned", "gather", "gathered", "multline", "split", "alignat", "eqnarray", "displaymath"]
+            return known.contains(name.replacingOccurrences(of: "*", with: "")) ? name : nil
+        }
+
         mutating func parseList() -> MarkdownBlock {
             guard let first = Self.listMarker(lines[index]) else { return .paragraph(lines[index]) }
             var items: [MarkdownBlock.ListItem] = []
@@ -231,6 +290,7 @@ enum MarkdownParser {
 
         static func startsBlock(_ t: String) -> Bool {
             fenceMarker(t) != nil || heading(t) != nil || t.hasPrefix(">") || isRule(t)
+                || t.hasPrefix("$$") || t.hasPrefix("\\[") || mathEnvironment(t) != nil
         }
 
         static func fenceMarker(_ t: String) -> String? {

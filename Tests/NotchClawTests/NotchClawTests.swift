@@ -38,6 +38,58 @@ struct MarkdownParserTests {
     @Test func testQuote() {
         #expect(MarkdownParser.parse("> quoted\n> more") == [.quote([.paragraph("quoted\nmore")])])
     }
+
+    @Test func testDisplayMathBlocks() {
+        #expect(MarkdownParser.parse("So:\n\\[\n\\frac{a}{b}\n\\]\nDone") == [
+            .paragraph("So:"), .math("\\frac{a}{b}"), .paragraph("Done"),
+        ])
+        #expect(MarkdownParser.parse("$$x^2$$") == [.math("x^2")])
+        #expect(MarkdownParser.parse("\\begin{align*}\na &= b\n\\end{align*}") == [.math("\\begin{align*}\na &= b\n\\end{align*}")])
+        // Display math with text after it on the same line stays in the paragraph.
+        #expect(MarkdownParser.parse("$$x$$ and more") == [.paragraph("$$x$$ and more")])
+        // Streaming: not closed yet.
+        #expect(MarkdownParser.parse("\\[\n\\sum_i") == [.math("\\sum_i")])
+    }
+}
+
+struct MathTests {
+    @Test func testSplitsInlineAndDisplayMath() {
+        #expect(MathSyntax.split("**\\(d_u/2\\)가 아닌 이유**") == [.text("**"), .math("d_u/2", display: false), .text("가 아닌 이유**")])
+        #expect(MathSyntax.split("Euler $e^{i\\pi}$ and \\[x\\]") == [
+            .text("Euler "), .math("e^{i\\pi}", display: false), .text(" and "), .math("x", display: true),
+        ])
+        #expect(MathSyntax.split("a $$b$$ c") == [.text("a "), .math("b", display: true), .text(" c")])
+    }
+
+    @Test func testLeavesPricesCodeAndEscapesAlone() {
+        #expect(MathSyntax.split("Costs $5 and $10 today") == [.text("Costs $5 and $10 today")])
+        #expect(MathSyntax.split("Run `echo $HOME $PATH` now") == [.text("Run `echo $HOME $PATH` now")])
+        #expect(MathSyntax.split("Literal \\$x\\$ and \\*") == [.text("Literal \\$x\\$ and \\*")])
+        #expect(MathSyntax.split("no close \\( here") == [.text("no close \\( here")])
+    }
+
+    @Test func testParsesCommonConstructs() {
+        #expect(MathParser.parse("\\frac{1}{2}") == [.fraction([.symbol("1", .ord)], [.symbol("2", .ord)], rule: true, style: nil)])
+        #expect(MathParser.parse("x_i^2") == [.scripts(.symbol("𝑥", .ord), sub: [.symbol("𝑖", .ord)], sup: [.symbol("2", .ord)])])
+        #expect(MathParser.parse("\\mathbb{R} \\le \\alpha") == [.symbol("ℝ", .ord), .symbol("≤", .rel), .symbol("𝛼", .ord)])
+        #expect(MathParser.parse("\\sin x") == [.function("sin", limits: false), .symbol("𝑥", .ord)])
+        #expect(MathParser.parse("\\text{a b}") == [.text("a b", bold: false, italic: false)])
+        #expect(MathParser.parse("a \\\\ b").count == 1)  // rows become an array
+    }
+
+    @Test func testParserToleratesBrokenInput() {
+        for latex in ["\\frac{a", "}}x{", "\\left( x", "x \\right)", "\\begin{pmatrix} 1 & 2", "^_", "\\", "\\unknown{x}", "\\sqrt["] {
+            _ = MathParser.parse(latex)
+        }
+    }
+
+    @MainActor @Test func testRendersWithBaseline() {
+        let inline = MathRenderer.render("\\frac{a}{b}", size: 13, display: false)
+        #expect(inline.image.size.width > 0)
+        #expect(inline.descent > 0 && inline.ascent > inline.descent)
+        let display = MathRenderer.render("\\sum_{i=1}^n i", size: 13, display: true)
+        #expect(display.image.size.height > inline.image.size.height)
+    }
 }
 
 struct VoiceCommandTests {

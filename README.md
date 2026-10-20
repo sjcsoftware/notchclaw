@@ -14,7 +14,7 @@
 
 <p align="center">
   <b>Talk to your <a href="https://github.com/openclaw/openclaw">OpenClaw</a> agent from the MacBook notch.</b><br>
-  Hover to open, hold a key to speak, and watch replies stream in as rich Markdown, charts, and images.
+  Hover to open, hold a key to speak, and watch replies stream in as rich Markdown, LaTeX math, charts, and images.
 </p>
 
 <p align="center">

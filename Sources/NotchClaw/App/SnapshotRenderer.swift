@@ -62,6 +62,33 @@ enum SnapshotRenderer {
                 """),
             ]
         }
+        // Chat with LaTeX math, inline and display.
+        scene(url, "math", height: 640) { app in
+            app.notch.expand(page: .chat)
+            app.session.items = [
+                ChatItem(id: "1", role: .user, text: "Why divide by 2 in the clustering coefficient?"),
+                ChatItem(id: "2", role: .assistant, text: #"""
+                ### 4. 왜 \(T_u\)에 역수를 곱할까?
+
+                두 노드를 고르는 경우의 수는 \(d_u(d_u-1)\)인데, 모든 edge를 두 번 세게 돼. **\(d_u/2\)가 아닌 이유**는 순서 때문이야.
+
+                \[
+                \boxed{\text{가능한 이웃 간 edge 수} = \frac{d_u(d_u-1)}{2}}
+                \]
+
+                $$C_u = \frac{2T_u}{d_u(d_u-1)}, \qquad \sum_{i=1}^{n} i^2 = \frac{n(n+1)(2n+1)}{6}$$
+
+                Euler: $e^{i\pi} + 1 = 0$, and the Gaussian $\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}$. Prices like $5 and $10 stay text.
+
+                \[
+                \begin{aligned}
+                f(x) &= \left( \frac{a+b}{c} \right)^2 + \sqrt[3]{x_1^2 + \hat{y}} \\
+                A &= \begin{pmatrix} 1 & 0 \\ 0 & \lambda \end{pmatrix}, \quad |x| = \begin{cases} x & x \ge 0 \\ -x & x < 0 \end{cases}
+                \end{aligned}
+                \]
+                """#),
+            ]
+        }
         // Chat with a rich Markdown reply and a native chart.
         scene(url, "chat", height: 580) { app in
             app.notch.expand(page: .chat)
